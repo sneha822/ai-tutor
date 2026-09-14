@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Tutor</title>
+  <link rel="stylesheet" href="/static/katex/katex.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script type="importmap">
+    { "imports": { "three": "/static/three/build/three.module.min.js", "three/addons/": "/static/three/addons/" } }
+  </script>
+  <script defer src="/static/katex/katex.min.js"></script>
+  <script defer src="/static/katex/contrib/auto-render.min.js"></script>
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <canvas id="stage" class="stage" aria-hidden="true"></canvas>
+  <div class="fallback-orb" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark"></span>Tutor<span id="conn" class="conn">offline</span></div>
+    <div class="chips">
+      <span id="paused" class="chip glass paused" hidden>Auto nudges paused</span>
+      <span id="mode" class="chip glass mode" data-mode="listening"><span class="dot"></span><span id="mode-text">Listening</span></span>
+    </div>
+  </header>
+
+  <div class="stage-ui">
+    <section id="focus-card" class="focus-card glass nocam" aria-label="Focus">
+      <div class="focus-top">
+        <span class="focus-label">Focus</span>
+        <span id="focus-state" class="focus-state">Camera off</span>
+      </div>
+      <div class="focus-score"><span id="focus-score">--</span></div>
+      <div class="meter"><div id="meter-fill" class="meter-fill"></div><div id="meter-threshold" class="meter-threshold"></div></div>
+      <div id="focus-detail" class="focus-detail">Waiting for the camera</div>
+    </section>
+
+    <nav id="controls" class="controls glass" aria-label="Call controls">
+      <div class="ctl-split">
+        <button type="button" id="audio-menu-btn" class="ctl ctl-caret" data-tip="Choose microphone and speaker" aria-label="Choose microphone and speaker" aria-haspopup="dialog" aria-controls="audio-menu" aria-expanded="false" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>
+        </button>
+        <button type="button" id="mic-btn" class="ctl" data-action="toggle_mic" data-tip="Turn off microphone (⌃⌥M)" aria-label="Turn off microphone" disabled>
+          <svg class="icon-on" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></svg>
+          <svg class="icon-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 9.3V5.5a3 3 0 0 0-5.7-1.3M9 9v2.5a3 3 0 0 0 5.1 2.1M5 11a7 7 0 0 0 11.4 5.4M19 11a7 7 0 0 1-.6 2.8M12 18v3.5M3 3l18 18"/></svg>
+        </button>
+      </div>
+      <button type="button" id="cam-btn" class="ctl" data-action="toggle_camera" data-tip="Turn off camera (⌃⌥V)" aria-label="Turn off camera" disabled>
+        <svg class="icon-on" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="13" height="12" rx="2.5"/><path d="M15.5 10.5 21.5 7v10l-6-3.5"/></svg>
+        <svg class="icon-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 6h2.5a2.5 2.5 0 0 1 2.5 2.5v2L21.5 7v10l-3.2-1.9M15.5 15.5A2.5 2.5 0 0 1 13 18H5a2.5 2.5 0 0 1-2.5-2.5v-7A2.5 2.5 0 0 1 5 6M3 3l18 18"/></svg>
+      </button>
+      <span class="ctl-sep" aria-hidden="true"></span>
+      <button type="button" class="ctl" data-action="interrupt" data-tip="Interrupt the tutor (⌃⌥I)" aria-label="Interrupt the tutor" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5"/></svg>
+      </button>
+      <button type="button" class="ctl" data-action="force" data-tip="Force a focus nudge (⌃⌥F)" aria-label="Force a focus nudge" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </button>
+      <button type="button" id="suppress-btn" class="ctl" data-action="toggle_suppress" data-tip="Pause automatic nudges (⌃⌥S)" aria-label="Pause automatic nudges" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="3.8" height="14" rx="1.2"/><rect x="13.7" y="5" width="3.8" height="14" rx="1.2"/></svg>
+      </button>
+      <button type="button" class="ctl" data-action="recalibrate" data-tip="Recalibrate focus: look at the screen (⌃⌥C)" aria-label="Recalibrate focus" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+      <span class="ctl-sep" aria-hidden="true"></span>
+      <button type="button" id="privacy-btn" class="ctl" data-tip="What's shared with the AI" aria-label="Privacy and data" aria-controls="privacy" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 4.5 5.5v6c0 4.7 3.2 8.6 7.5 10 4.3-1.4 7.5-5.3 7.5-10v-6z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>
+      </button>
+    </nav>
+  </div>
+
+  <div id="audio-menu" class="device-menu" role="dialog" aria-label="Microphone and speaker" hidden>
+    <section class="dm-section">
+      <div class="dm-head">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></svg>
+        <span id="dm-mic-title">Microphone</span>
+        <span class="dm-meter" title="How loud the tutor hears you"><span id="dm-level"></span></span>
+        <span class="dm-off">Mic off</span>
+      </div>
+      <div id="dm-inputs" class="dm-list" role="radiogroup" aria-labelledby="dm-mic-title"></div>
+    </section>
+    <section class="dm-section">
+      <div class="dm-head">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+        <span id="dm-speaker-title">Speaker</span>
+        <button type="button" id="dm-test" class="dm-test">Test</button>
+      </div>
+      <div id="dm-outputs" class="dm-list" role="radiogroup" aria-labelledby="dm-speaker-title"></div>
+    </section>
+    <p class="dm-foot">Using speakers instead of headphones? The tutor may hear itself and stop mid-sentence, so headphones work best.</p>
+  </div>
+
+  <div id="selfview" class="selfview no-video" data-corner="tr" aria-label="Your camera">
+    <video playsinline muted autoplay></video>
+    <div class="sv-placeholder">
+      <span class="sv-avatar">You</span>
+      <span class="sv-status">Starting camera…</span>
+    </div>
+    <div class="sv-name">
+      <svg class="sv-mic-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 9.3V5.5a3 3 0 0 0-5.7-1.3M9 9v2.5a3 3 0 0 0 5.1 2.1M5 11a7 7 0 0 0 11.4 5.4M12 18v3.5M3 3l18 18"/></svg>
+      You
+    </div>
+    <div class="sv-tools">
+      <button type="button" class="sv-btn" data-sv="camera" title="Turn camera off or on" aria-label="Turn camera off or on">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="13" height="12" rx="2.5"/><path d="M15.5 10.5 21.5 7v10l-6-3.5"/></svg>
+      </button>
+      <button type="button" class="sv-btn" data-sv="minimize" title="Minimize self-view" aria-label="Minimize self-view">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>
+      </button>
+    </div>
+    <button type="button" class="sv-expand" data-sv="expand" aria-label="Show self-view">
+      <span class="sv-expand-dot"></span>You
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+    </button>
+    <div class="sv-resize" aria-hidden="true"></div>
+  </div>
+
+  <aside class="panel glass" aria-label="Conversation">
+    <div class="panel-head"><span>Conversation</span><span class="panel-hint">Talk anytime, even mid-reply</span></div>
+    <div id="conversation" class="conversation" aria-live="polite">
+      <div id="empty" class="empty">
+        <p class="empty-title">Say hello</p>
+        <p>Ask about anything you're studying. I'm listening.</p>
+      </div>
+    </div>
+  </aside>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <div id="scrim" class="scrim" hidden></div>
+  <aside id="privacy" class="drawer" aria-label="Privacy and data" aria-hidden="true">
+    <div class="drawer-head">
+      <div>
+        <p class="drawer-kicker">Privacy &amp; data</p>
+        <h2>What the AI sees</h2>
+      </div>
+      <button type="button" id="privacy-close" class="icon-btn" title="Close (Esc)" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <div class="drawer-body">
+      <section class="live-grid" aria-label="Right now">
+        <div class="live-card" id="live-camera"><span class="live-dot"></span><div><p class="live-label">Camera</p><p class="live-value">…</p></div></div>
+        <div class="live-card" id="live-mic"><span class="live-dot"></span><div><p class="live-label">Microphone</p><p class="live-value">…</p></div></div>
+        <div class="live-card" id="live-stt"><span class="live-dot"></span><div><p class="live-label">Transcription</p><p class="live-value">…</p></div></div>
+        <div class="live-card cloud" id="live-llm"><span class="live-dot"></span><div><p class="live-label">AI model</p><p class="live-value" data-p="llm_model">…</p></div></div>
+      </section>
+
+      <section class="data-group cloud">
+        <h3>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19H7a4.5 4.5 0 1 1 .9-8.9A6 6 0 0 1 19.4 12 3.5 3.5 0 0 1 17.5 19z"/></svg>
+          Sent to the AI service <span>Groq, over the internet</span>
+        </h3>
+        <ul>
+          <li><strong>Short clips of your voice</strong><span>Only after you finish speaking, to turn them into text (<span data-p="stt_model">Whisper</span>). If the connection drops, transcription happens on this computer instead.</span></li>
+          <li><strong>The conversation as text</strong><span>Your transcribed words, the tutor's recent replies (last <span data-p="history_turns">10</span> exchanges) and matching passages from your course notes, so the tutor can answer.</span></li>
+          <li><strong>Focus nudges, as words</strong><span>When a nudge fires, a short note like "looking down for 12s" and the current topic. Never images or video.</span></li>
+        </ul>
+      </section>
+
+      <section class="data-group local">
+        <h3>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M1.5 19.5h21"/></svg>
+          Stays on this computer
+        </h3>
+        <ul>
+          <li><strong>Your camera video</strong><span>Analyzed in memory for head angle, eye openness and presence, then discarded. Never saved or uploaded. Your self-view is drawn only in this browser tab.</span></li>
+          <li><strong>Focus score and face measurements</strong><span>Computed locally. Only the nudge note above ever leaves.</span></li>
+          <li><strong>The tutor's voice</strong><span>Generated on this computer (<span data-p="tts">Kokoro</span>), along with speech detection and the offline transcription fallback.</span></li>
+          <li><strong>Your course materials</strong><span>The files in ./materials and their search index.</span></li>
+          <li><strong>Session logs</strong><span>Transcripts and focus scores in ./logs, kept on this computer only.</span></li>
+        </ul>
+      </section>
+
+      <p class="drawer-foot">Turn the camera or microphone off anytime from the bar at the bottom, or with ⌃⌥V and ⌃⌥M. Off means off: the device is released.</p>
+    </div>
+  </aside>
+</body>
+</html>

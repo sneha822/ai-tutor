@@ -1,0 +1,37 @@
+# Python 3.12 required (kokoro does not support 3.13+).
+
+# --- Vision (stage 1) ---
+# mediapipe 1.0.x aborts on macOS arm64 (Metal service check in TensorsToDetectionsCalculator); stay on 0.10.35.
+mediapipe==0.10.35
+opencv-python==5.0.0.93
+numpy==2.5.3
+
+# --- LLM + RAG (stage 2) ---
+groq==1.7.0
+httpx==0.28.1
+python-dotenv==1.2.3
+chromadb==1.5.9
+sentence-transformers==6.0.1
+torch==2.14.0
+pypdf==6.18.1
+
+# --- Voice (stage 3) ---
+kokoro==0.9.4
+misaki==0.9.4
+spacy==3.8.16
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+torchaudio==2.11.0
+soundfile==0.14.0
+sounddevice==0.5.6
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+silero-vad==6.2.1
+onnxruntime==1.30.0
+pynput==1.8.2
+pyobjc-framework-ApplicationServices==12.2.2 ; sys_platform == "darwin"   # macOS-only Accessibility check in scripts/hotkey_check.py
+
+# --- UI (stage 5) ---
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.53.0
+websockets==17.1

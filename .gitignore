@@ -1,0 +1,33 @@
+# Everything here is either private, huge, or rebuilt automatically on each computer.
+
+# Your Groq API key. Never commit this (share .env.example instead).
+.env
+
+# Python virtual environment: about 2 GB, and everyone creates their own (see SETUP.md)
+.venv/
+venv/
+env/
+
+# Downloaded by scripts/download_models.py
+models/
+
+# Search index of ./materials, rebuilt automatically when the tutor starts
+.chroma/
+
+# Session logs and check reports (they contain what you said to the tutor)
+logs/
+
+# Microphone and speaker picked in the page; different on every computer
+local_settings.json
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# OS and editor clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

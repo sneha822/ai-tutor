@@ -12,6 +12,7 @@
   --warn: #ffb347;
   --bad: #ff5c4d;
   --danger: #ea4335;
+  --emo: #7ee8ff; /* the AI's current emotion colour, set by app.js */
   --panel-w: min(470px, 38vw);
   --gap: 24px;
   --radius: 20px;
@@ -95,6 +96,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .mode[data-mode="thinking"] .dot, .mode[data-mode="speaking"] .dot { animation-duration: .7s; }
 .chip.paused { color: var(--warn); border-color: rgba(255, 179, 71, .35); }
 
+.session-chip { color: var(--text); font: inherit; font-size: .8rem; font-weight: 500; cursor: pointer; transition: background .2s; }
+.session-chip svg { width: 14px; height: 14px; color: var(--muted); }
+.session-chip:hover { background: rgba(255, 255, 255, .1); }
+.session-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.emotion-chip { color: var(--text); border-color: color-mix(in srgb, var(--emo) 40%, transparent); transition: border-color .5s; }
+.emo-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--emo); box-shadow: 0 0 12px var(--emo); transition: background .5s, box-shadow .5s; }
+
 @keyframes pulse {
   0%, 100% { opacity: .45; transform: scale(.8); }
   50% { opacity: 1; transform: scale(1.15); }
@@ -129,6 +137,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 }
 .meter-threshold { position: absolute; top: -5px; bottom: -5px; left: 50%; width: 2px; border-radius: 2px; background: rgba(255, 255, 255, .55); }
 .focus-detail { min-height: 1.3em; margin-top: 10px; overflow: hidden; font-size: .78rem; color: var(--muted); white-space: nowrap; text-overflow: ellipsis; }
+.focus-strikes { display: inline-flex; margin-top: 10px; padding: 3px 10px; border-radius: 999px; background: rgba(255, 179, 71, .12); color: var(--warn); font-size: .72rem; font-weight: 600; }
+.focus-strikes.high { background: rgba(255, 92, 77, .15); color: var(--bad); }
+/* Friend, therapist and chat modes: no focus score, just what the camera notices */
+.presence-text { display: none; margin: 6px 0 2px; font-size: 1.4rem; font-weight: 300; line-height: 1.25; letter-spacing: -.02em; }
+.focus-card.presence .focus-score, .focus-card.presence .meter { display: none; }
+.focus-card.presence .presence-text { display: block; }
+.focus-card.presence .focus-state { color: var(--emo); }
+.focus-card.presence .focus-detail { white-space: normal; }
 
 .focus-card.good .focus-state { color: var(--good); }
 .focus-card.warn .focus-state { color: var(--warn); }
@@ -355,9 +371,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
   font-size: .95rem;
 }
 .msg.user .who { color: rgba(126, 232, 255, .6); text-align: right; }
-.msg.tutor { padding: 2px 0 2px 16px; border-left: 2px solid rgba(180, 140, 255, .5); font-size: 1.14rem; color: var(--text); transition: border-color .4s; }
-.msg.tutor .who { color: rgba(180, 140, 255, .85); }
-.msg.tutor.live { border-left-color: var(--accent); }
+.msg.tutor { padding: 2px 0 2px 16px; border-left: 2px solid var(--msg-emo, rgba(180, 140, 255, .5)); font-size: 1.14rem; color: var(--text); transition: border-color .5s, box-shadow .5s; }
+.msg.tutor .who { color: var(--msg-emo, rgba(180, 140, 255, .85)); transition: color .5s; }
+.msg.tutor.live { box-shadow: -8px 0 18px -14px var(--msg-emo, var(--accent)); }
 .msg.interrupted { opacity: .58; }
 .msg .tag {
   display: inline-block;
@@ -387,6 +403,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 }
 .nudge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 10px var(--warn); }
 
+.divider { display: flex; align-items: center; gap: 12px; font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); animation: rise .45s var(--ease) both; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--stroke-strong); }
+
 @keyframes rise {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
@@ -394,12 +413,12 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 
 /* ---------------------------------------------------------------- privacy drawer */
 
-.scrim { position: fixed; z-index: 5; inset: 0; background: rgba(2, 4, 9, .45); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: fade .3s ease both; }
+.scrim { position: fixed; z-index: 8; inset: 0; background: rgba(2, 4, 9, .45); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: fade .3s ease both; }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
 .drawer {
   position: fixed;
-  z-index: 6;
+  z-index: 9;
   top: 12px;
   right: 12px;
   bottom: 12px;
@@ -537,6 +556,92 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .dm-test.playing { border-color: rgba(126, 232, 255, .5); color: var(--accent); }
 .dm-foot { margin: 4px 10px 6px; padding-top: 10px; border-top: 1px solid var(--stroke); font-size: .74rem; line-height: 1.45; color: var(--faint); }
 
+/* ---------------------------------------------------------------- welcome popup (name + subject or talk mode) */
+
+.welcome {
+  position: fixed;
+  z-index: 7;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+  background: radial-gradient(ellipse at 38% 45%, rgba(5, 7, 13, .3), rgba(5, 7, 13, .85) 70%);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: fade .35s ease both;
+}
+.welcome-card {
+  width: min(440px, 100%);
+  padding: 30px 28px 22px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 26px;
+  background: rgba(12, 17, 29, .92);
+  box-shadow: 0 40px 120px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .06);
+  animation: menu-in .5s var(--ease) both;
+}
+.welcome-mark { display: block; width: 34px; height: 34px; margin-bottom: 18px; border-radius: 11px; }
+.welcome-kicker { margin: 0 0 6px; font-size: .7rem; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); }
+.welcome-card h1 { margin: 0 0 22px; font-size: 1.5rem; font-weight: 650; line-height: 1.22; letter-spacing: -.02em; }
+
+.field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 16px; }
+.field-label { font-size: .78rem; font-weight: 600; color: var(--muted); }
+.field input, .field select {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .05);
+  color: var(--text);
+  font: inherit;
+  font-size: .95rem;
+  outline: none;
+  transition: border-color .2s, background .2s, box-shadow .2s;
+}
+.field input::placeholder { color: var(--faint); }
+.field input:focus, .field select:focus { border-color: rgba(126, 232, 255, .6); background: rgba(126, 232, 255, .06); box-shadow: 0 0 0 3px rgba(126, 232, 255, .15); }
+.select-wrap { position: relative; display: block; }
+.select-wrap select { padding-right: 40px; cursor: pointer; appearance: none; -webkit-appearance: none; }
+.select-wrap select:invalid { color: var(--faint); }
+.select-wrap option, .select-wrap optgroup { background: #0f1523; color: var(--text); }
+.select-wrap svg { position: absolute; top: 50%; right: 14px; width: 16px; height: 16px; color: var(--muted); pointer-events: none; transform: translateY(-50%); }
+
+.welcome-note { margin: -4px 0 16px; padding: 10px 12px; border: 1px solid rgba(126, 232, 255, .16); border-radius: 12px; background: rgba(126, 232, 255, .06); font-size: .8rem; line-height: 1.45; color: #cdeaf3; }
+.welcome-note[data-mode="friend"] { border-color: rgba(255, 184, 107, .25); background: rgba(255, 184, 107, .07); color: #ffe2c2; }
+.welcome-note[data-mode="therapist"] { border-color: rgba(255, 159, 184, .25); background: rgba(255, 159, 184, .07); color: #ffdce6; }
+.welcome-note[data-mode="chat"] { border-color: rgba(143, 168, 255, .25); background: rgba(143, 168, 255, .07); color: #dde4ff; }
+
+.switch-row { position: relative; display: flex; align-items: center; gap: 12px; margin: 4px 0 20px; cursor: pointer; }
+.switch-row input { position: absolute; opacity: 0; pointer-events: none; }
+.switch { position: relative; flex: none; width: 42px; height: 24px; border-radius: 999px; background: rgba(255, 255, 255, .14); transition: background .2s; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .2s var(--ease); }
+.switch-row input:checked + .switch { background: var(--good); }
+.switch-row input:checked + .switch::after { transform: translateX(18px); }
+.switch-row input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch-text { display: flex; flex-direction: column; gap: 2px; font-size: .88rem; }
+.switch-text span { font-size: .76rem; line-height: 1.35; color: var(--muted); }
+
+.welcome-start {
+  width: 100%;
+  padding: 13px 18px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent), var(--violet));
+  color: #07101c;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 12px 30px rgba(126, 232, 255, .22);
+  transition: transform .15s, filter .2s, opacity .2s;
+}
+.welcome-start:hover:not([disabled]) { filter: brightness(1.08); }
+.welcome-start:active:not([disabled]) { transform: scale(.98); }
+.welcome-start:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.welcome-start[disabled] { opacity: .4; cursor: not-allowed; box-shadow: none; }
+.welcome-foot { margin: 14px 0 0; font-size: .76rem; text-align: center; color: var(--faint); }
+.link-btn { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+
 .fallback-orb {
   display: none;
   position: fixed;
@@ -573,6 +678,10 @@ body.no-avatar .stage { background: radial-gradient(ellipse at 38% 50%, #0d1426,
   .toast, .fallback-orb { left: 50%; }
   .toast { bottom: calc(46vh + var(--gap) + 70px); }
   .live-grid { grid-template-columns: 1fr; }
+  .chips { gap: 6px; }
+  #emotion-text { display: none; }
+  #session-text { max-width: 96px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .welcome-card { padding: 24px 20px 18px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

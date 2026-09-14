@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import threading
 import time
 import webbrowser
@@ -32,18 +31,19 @@ log = logging.getLogger("ui")
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 HISTORY_EVENTS = 400   # replayed to a page that connects or reloads mid-session
-_NUDGE_REASON = re.compile(r"distracted — (.*?)\. Current topic")
 DEVICE_ACTIONS = ("list_devices", "set_input_device", "set_output_device", "test_speaker")
 SPEAKER_BUSY = "The tutor is talking right now, so you're already hearing this speaker"
 
 
 class UIServer:
     def __init__(self, state: SharedState, detector=None, actions: dict[str, Callable[[], None]] | None = None,
-                 devices=None):
+                 devices=None, param_actions: dict[str, Callable[[dict], None]] | None = None):
         self._state = state
         self._detector = detector
         self._actions = actions or {}
+        self._param_actions = param_actions or {}   # actions that take the page's message, e.g. start_session
         self._devices = devices   # tutor.audio.devices.AudioDevices, for the microphone/speaker menu
+        self.started = False
         self._clients: set[WebSocket] = set()
         self._history: deque[dict] = deque(maxlen=HISTORY_EVENTS)
         self._history_lock = threading.Lock()
@@ -73,6 +73,7 @@ class UIServer:
             log.error("UI SERVER DID NOT START (is port %d in use?); the tutor keeps running without the page",
                       config.UI_PORT)
             return
+        self.started = True
         log.info("UI ready at %s", self.url)
         if config.UI_OPEN_BROWSER:
             try:
@@ -137,8 +138,10 @@ class UIServer:
                 backlog = list(self._history)
             try:
                 devices = await asyncio.to_thread(self._devices_snapshot)
+                session = self._state.session
                 await socket.send_text(json.dumps({"type": "hello", "events": backlog, "status": self._status(),
-                                                   "privacy": self._privacy(), "devices": devices}))
+                                                   "privacy": self._privacy(), "devices": devices,
+                                                   "session": session.to_dict() if session else None}))
                 while True:
                     raw = await socket.receive_text()
                     # In a worker thread: switching an audio device takes a moment and must not stall the pumps.
@@ -161,6 +164,13 @@ class UIServer:
             return
         if action in DEVICE_ACTIONS:
             self._device_request(action, msg)
+            return
+        if action in self._param_actions:
+            log.info("UI %s", action)
+            try:
+                self._param_actions[action](msg)
+            except Exception:
+                log.exception("UI action %s failed (continuing)", action)
             return
         fn = self._actions.get(action)
         if fn is None:
@@ -220,23 +230,39 @@ class UIServer:
             return {"type": "tutor_done", "t": t}
         if kind == "interrupted":
             return {"type": "interrupted", "source": text, "t": t}
-        if kind == "intervention":   # hidden [SYSTEM: ...] text never reaches the page, only the reason
-            match = _NUDGE_REASON.search(text)
-            return {"type": "nudge", "reason": match.group(1) if match else "looked distracted", "t": t}
+        if kind == "intervention":   # only the label reaches the page, never the hidden [SYSTEM: ...] text
+            return {"type": "nudge", "reason": text, "t": t}
+        if kind == "emotion":
+            return {"type": "emotion", "emotion": text, "t": t}
+        if kind == "session":
+            return {"type": "session", "session": json.loads(text), "t": t}
         return None
+
+    def _emotion(self) -> str:
+        """The AI's emotion, relaxing to neutral EMOTION_HOLD_S after it last spoke."""
+        s = self._state
+        if s.turn_active or s.tutor_speaking:
+            return s.emotion
+        quiet_for = time.monotonic() - max(s.emotion_changed_at, s.playback_ended_at)
+        return s.emotion if quiet_for < config.EMOTION_HOLD_S else "neutral"
 
     def _status(self) -> dict:
         s = self._state
+        session = s.session
         status = {"type": "status", "tutor_speaking": s.tutor_speaking, "user_speaking": s.user_speaking,
                   "thinking": s.turn_active and not s.tutor_speaking, "suppressed": s.interventions_suppressed,
                   "camera_enabled": s.camera_enabled, "mic_enabled": s.mic_enabled,
-                  "stt_source": s.last_stt_source, "threshold": config.FOCUS_THRESHOLD, "focus": None}
+                  "stt_source": s.last_stt_source, "threshold": config.FOCUS_THRESHOLD, "focus": None,
+                  "session": session.to_dict() if session else None, "emotion": self._emotion(),
+                  "strikes": s.distraction_strikes,
+                  "focus_tracking": bool(session and session.tutoring and s.camera_enabled)}
         if self._detector is not None:
             try:
                 snap = self._detector.snapshot()
                 status["focus"] = {"score": snap.score, "state": snap.state, "reason": snap.reason,
                                    "distracted": snap.distracted, "face": snap.face_present,
                                    "camera_ok": snap.camera_ok, "calibrated": snap.calibrated,
+                                   "expression": snap.expression, "observation": snap.observation,
                                    "description": snap.describe() if snap.state in ("UNFOCUSED", "DISTRACTED") else ""}
             except Exception:
                 log.exception("focus snapshot for UI failed")

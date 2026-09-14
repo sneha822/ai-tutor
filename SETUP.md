@@ -173,7 +173,20 @@ doesn't, go to <http://127.0.0.1:8765> yourself.
 The browser will ask for camera access too. That's only for the small video of yourself in the corner, which stays in
 your browser.
 
-## Step 8: Choose your microphone and speaker
+## Step 8: Tell it who you are
+
+A welcome window appears on the page:
+
+1. Type your **name**.
+2. Under **I'd like to**, pick a subject to study (or **Another subject…** and type it), or pick an off-topic mode:
+   **Talk with a friend**, **Therapist** (a supportive listener, not a real therapist) or **Just a normal chat**.
+3. Choose whether to **use your camera**. The tutor needs it to notice when you get distracted. The other modes work
+   fine without it, but they're a little warmer when they can see you.
+4. Click **Start**. It greets you by name and tells you what you're doing today.
+
+To switch later, click your name at the top right of the page.
+
+## Step 9: Choose your microphone and speaker
 
 On the tutor page, click the **small arrow (^) just left of the microphone button** at the bottom.
 
@@ -183,13 +196,15 @@ On the tutor page, click the **small arrow (^) just left of the microphone butto
 You can mix and match, for example headphones for sound with your laptop's microphone. Your choice is remembered for
 next time.
 
-## Step 9: Use it
+## Step 10: Use it
 
-Just talk. Try *"Teach me derivatives"* or *"Explain how photosynthesis works"*.
+Just talk. Try *"Teach me derivatives"*, or in friend mode *"Guess what happened today"*.
 
 - **Interrupt anytime** by talking over it.
-- **It notices when you drift.** Look at your phone or step away for about 10 seconds and it will gently bring you
-  back.
+- **Watch its face.** Its colour and expression change with how it feels: happy, sad, confused, surprised, angry
+  and more. The chip at the top says which.
+- **In tutor mode it notices when you drift.** Look at your phone or step away for about 10 seconds and it brings
+  you back. Keep doing it and it gets annoyed, then properly mad (never mean).
 - **The bottom bar:** microphone on/off (with the device menu next to it), camera on/off, stop the tutor talking,
   trigger a focus reminder now, pause focus reminders, recalibrate (look at the screen, then click), and the shield,
   which shows exactly what is sent to the AI and what stays on your computer.
@@ -224,7 +239,7 @@ Then run the step 4 install command and the step 6 download command again. They 
 | `python3.12: command not found`, or `py -3.12` doesn't work | Python 3.12 isn't installed (step 2). On Windows, run the installer again and tick **Add python.exe to PATH**. |
 | pip says no matching version was found for a package | You're using the wrong Python version. Delete the `.venv` folder and redo step 4 with Python 3.12. |
 | An error about `GROQ_API_KEY`, or the tutor says "I lost my connection" | Check step 5: the file must be called exactly `.env` (not `.env.txt`) and hold your real key with no spaces. Also check your internet connection. |
-| The tutor doesn't react when you talk | Open the device menu (step 8) and pick another microphone until the green bar moves. Mac: System Settings → Privacy & Security → Microphone → turn on **Terminal**, then restart the tutor. Windows: Settings → Privacy & security → Microphone → turn on **Let desktop apps access your microphone**. |
+| The tutor doesn't react when you talk | Make sure you clicked **Start** in the welcome window (step 8). Then open the device menu (step 9) and pick another microphone until the green bar moves. Mac: System Settings → Privacy & Security → Microphone → turn on **Terminal**, then restart the tutor. Windows: Settings → Privacy & security → Microphone → turn on **Let desktop apps access your microphone**. |
 | Focus card says "Camera off" when the camera is on | Mac: System Settings → Privacy & Security → Camera → turn on **Terminal**, then restart. Windows: Settings → Privacy & security → Camera → turn on **Let desktop apps access your camera**. Close other apps using the camera (Zoom, Meet, Teams). |
 | The tutor keeps stopping mid-sentence | It hears its own voice through your speakers. Use headphones and pick them as the speaker in the device menu. |
 | No sound | Device menu → Speaker → pick the right one and press **Test**. Check your volume. |

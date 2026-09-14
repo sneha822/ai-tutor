@@ -1,6 +1,7 @@
-// Companion avatar: a stylized 3D tutor head built from primitives in three.js (no model files).
-// It floats, blinks and glances around; its mouth bars follow the tutor's real playback loudness; it leans in
-// while the student talks, looks up while thinking, and turns concerned when focus drops.
+// Companion avatar: a stylized 3D head built from primitives in three.js (no model files).
+// It floats, blinks and glances around; its mouth bars follow the real playback loudness; it leans in while the user
+// talks and looks up while thinking. Its face, colour and motion follow the AI's emotion tag: eyebrows, eye shape,
+// mouth curve, head tilt, bob, glow and a "?" or "!" when confused or surprised.
 
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -8,23 +9,46 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { EMOTIONS } from "./emotions.js";
 
 const HEAD_SCALE = new THREE.Vector3(1.12, 0.95, 0.95);
 const VISOR_R = 1.075;
 const GLOW = 3.2; // HDR multiplier so glowing parts bloom
-const EYE_CALM = new THREE.Color("#7ee8ff");
-const EYE_ALERT = new THREE.Color("#ffb347");
 const FOCUS_COLORS = {
   good: new THREE.Color("#46e6a6"),
   warn: new THREE.Color("#ffb347"),
   bad: new THREE.Color("#ff5c4d"),
   nocam: new THREE.Color("#6f7d99"),
 };
+const EMOTION_COLORS = Object.fromEntries(Object.entries(EMOTIONS).map(([name, e]) => [name, new THREE.Color(e.color)]));
 const BAR_SHAPE = [0.42, 0.7, 0.9, 1.0, 0.9, 0.7, 0.42];
 const PANEL_MAX = 470;
 const PANEL_FRACTION = 0.38;
 const GAP = 24;
 const AVATAR_HALF_WIDTH = 1.75; // outer halo radius plus a margin, in world units
+
+// Face shape per emotion. brow: + raises the inner ends (sad, worried), - lowers them (angry). eyeTilt: + leans the
+// eye tops outward (fierce), - inward (sad). arc: left/right eye as a happy "∩" arc. smile: mouth curve -1..1.
+// slant/wave: crooked or wobbly mouth. tilt/pitch: head roll and nod (+ = down). bob/speed: floating motion.
+const NEUTRAL_FACE = {
+  brow: 0, browLift: 0, browAsym: 0, eyeOpen: 1, eyeTilt: 0, arcL: 0, arcR: 0, smile: 0.35, mouthOpen: 0, slant: 0,
+  wave: 0, tilt: 0, pitch: 0, sink: 0, lookX: 0, lookY: 0, bob: 1, speed: 1, tremble: 0, glow: 1, glyph: "",
+};
+const FACE = {
+  neutral: {},
+  happy: { brow: 0.08, browLift: 0.03, arcL: 1, arcR: 1, smile: 1, mouthOpen: 0.1, tilt: 0.06, pitch: -0.02, bob: 1.3, speed: 1.3, glow: 1.15 },
+  excited: { brow: 0.05, browLift: 0.07, eyeOpen: 1.25, smile: 1, mouthOpen: 0.45, pitch: -0.05, bob: 1.9, speed: 1.9, glow: 1.3 },
+  proud: { brow: -0.05, browLift: 0.02, arcL: 1, arcR: 1, smile: 0.85, pitch: -0.13, bob: 1.1, glow: 1.15 },
+  playful: { browLift: 0.01, browAsym: 0.07, arcR: 1, smile: 0.8, slant: 0.35, tilt: 0.14, bob: 1.4, speed: 1.4, glow: 1.1 },
+  caring: { brow: 0.22, browLift: 0.01, eyeOpen: 0.85, eyeTilt: -0.08, smile: 0.55, tilt: 0.1, pitch: 0.05, bob: 0.8, speed: 0.75, glow: 0.95 },
+  thoughtful: { brow: 0.06, browLift: 0.02, browAsym: 0.05, eyeOpen: 0.8, smile: 0.1, slant: 0.25, tilt: -0.1, pitch: -0.12, lookX: 0.045, lookY: 0.04, bob: 0.7, speed: 0.7, glow: 0.95 },
+  confused: { brow: -0.05, browLift: 0.02, browAsym: 0.1, eyeOpen: 1.05, smile: -0.15, slant: 0.5, wave: 1, tilt: 0.22, bob: 0.9, speed: 0.9, glyph: "?" },
+  surprised: { browLift: 0.1, eyeOpen: 1.4, smile: 0, mouthOpen: 1, pitch: -0.06, bob: 1.2, speed: 1.2, glow: 1.25, glyph: "!" },
+  sad: { brow: 0.38, browLift: -0.01, eyeOpen: 0.75, eyeTilt: -0.18, smile: -0.9, tilt: -0.06, pitch: 0.2, sink: 0.1, bob: 0.5, speed: 0.55, glow: 0.6 },
+  annoyed: { brow: -0.25, browLift: -0.02, browAsym: 0.02, eyeOpen: 0.62, eyeTilt: 0.14, smile: -0.4, slant: 0.2, tilt: -0.05, pitch: 0.06, bob: 0.6, speed: 0.8 },
+  angry: { brow: -0.5, browLift: -0.035, eyeOpen: 0.75, eyeTilt: 0.3, smile: -1, mouthOpen: 0.2, pitch: 0.12, bob: 0.35, speed: 0.6, tremble: 0.022, glow: 1.35 },
+};
+const faceFor = (name) => ({ ...NEUTRAL_FACE, ...(FACE[name] || {}) });
 
 const damp = (current, target, rate, dt) => current + (target - current) * (1 - Math.exp(-rate * dt));
 
@@ -42,6 +66,22 @@ function pivotOnVisor(parent, x, y, lift = 0.012) {
 }
 
 const glow = (color, strength = GLOW) => new THREE.MeshBasicMaterial({ color: color.clone().multiplyScalar(strength) });
+
+function glyphSprite(char) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 128;
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#ffffff";
+  g.font = "800 104px -apple-system, 'Segoe UI', Arial, sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(char, 64, 72);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+  sprite.scale.setScalar(0.001);
+  return sprite;
+}
 
 export function createAvatar(canvas) {
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -62,8 +102,8 @@ export function createAvatar(canvas) {
   const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
   camera.position.set(0, 0.15, 8);
 
-  // Backdrop: deep blue radial glow, tinted by the student's focus.
-  const backdropUniforms = { uTint: { value: FOCUS_COLORS.nocam.clone() }, uTintAmount: { value: 0.2 } };
+  // Backdrop: deep blue radial glow, tinted by the current emotion.
+  const backdropUniforms = { uTint: { value: EMOTION_COLORS.neutral.clone() }, uTintAmount: { value: 0.3 } };
   const backdrop = new THREE.Mesh(
     new THREE.PlaneGeometry(44, 26),
     new THREE.ShaderMaterial({
@@ -124,18 +164,32 @@ export function createAvatar(canvas) {
   visor.scale.copy(HEAD_SCALE);
   head.add(visor);
 
-  const featureColor = EYE_CALM.clone();
-  const eyeMat = glow(EYE_CALM);
+  const featureColor = EMOTION_COLORS.neutral.clone();
+  const eyeMat = glow(featureColor);
   const eyeGeo = new THREE.CapsuleGeometry(0.075, 0.13, 8, 20);
+  const arcGeo = new THREE.TorusGeometry(0.085, 0.024, 10, 32, Math.PI); // "∩": a closed, smiling eye
+  const browMat = glow(featureColor, GLOW * 0.8);
+  const browGeo = new THREE.CapsuleGeometry(0.02, 0.17, 6, 12);
   const eyes = [-0.34, 0.34].map((x) => {
+    const side = Math.sign(x);
     const eye = new THREE.Mesh(eyeGeo, eyeMat);
     eye.scale.z = 0.35;
     pivotOnVisor(head, x, 0.13).add(eye);
-    return { eye, side: Math.sign(x) };
+    const arc = new THREE.Mesh(arcGeo, eyeMat);
+    arc.position.y = -0.03;
+    arc.scale.setScalar(0.001);
+    pivotOnVisor(head, x, 0.13).add(arc);
+    const brow = new THREE.Group();
+    pivotOnVisor(head, x, 0.37).add(brow);
+    const browBar = new THREE.Mesh(browGeo, browMat);
+    browBar.rotation.z = Math.PI / 2;
+    browBar.scale.z = 0.4;
+    brow.add(browBar);
+    return { eye, arc, brow, side };
   });
 
   const mouth = pivotOnVisor(head, 0, -0.27);
-  const barMat = glow(EYE_CALM, GLOW * 0.9);
+  const barMat = glow(featureColor, GLOW * 0.9);
   const barGeo = new THREE.CapsuleGeometry(0.022, 0.16, 6, 12); // ~0.204 tall
   const bars = BAR_SHAPE.map((shape, i) => {
     const bar = new THREE.Mesh(barGeo, barMat);
@@ -146,7 +200,7 @@ export function createAvatar(canvas) {
   });
 
   const trimMat = new THREE.MeshPhysicalMaterial({ color: 0xcfd7e6, roughness: 0.35, metalness: 0.25, clearcoat: 0.6 });
-  const earRingMat = glow(EYE_CALM, 1.4);
+  const earRingMat = glow(featureColor, 1.4);
   for (const side of [-1, 1]) {
     const ear = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.2, 48), trimMat);
     ear.rotation.z = Math.PI / 2;
@@ -166,22 +220,29 @@ export function createAvatar(canvas) {
   tip.position.set(0, 1.36, 0);
   head.add(tip);
 
-  const neckMat = glow(EYE_CALM, 2);
+  const neckMat = glow(featureColor, 2);
   const neck = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.03, 16, 64), neckMat);
   neck.rotation.x = Math.PI / 2;
   neck.position.y = -1.08;
   avatar.add(neck);
 
-  const haloMat = new THREE.MeshBasicMaterial({ color: FOCUS_COLORS.nocam.clone().multiplyScalar(GLOW), transparent: true, opacity: 0.95 });
+  const haloMat = new THREE.MeshBasicMaterial({ color: featureColor.clone().multiplyScalar(GLOW), transparent: true, opacity: 0.95 });
   const halo = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.018, 12, 160), haloMat);
   halo.rotation.x = Math.PI / 2;
   halo.position.y = -1.5;
   avatar.add(halo);
-  const outerHaloMat = new THREE.MeshBasicMaterial({ color: haloMat.color.clone(), transparent: true, opacity: 0.4 });
+  // The thin outer ring keeps showing the user's focus (tutor mode), independent of the AI's mood.
+  const outerHaloMat = new THREE.MeshBasicMaterial({ color: FOCUS_COLORS.nocam.clone(), transparent: true, opacity: 0.4 });
   const outerHalo = new THREE.Mesh(new THREE.TorusGeometry(1.6, 0.008, 8, 160), outerHaloMat);
   outerHalo.rotation.x = Math.PI / 2;
   outerHalo.position.y = -1.52;
   avatar.add(outerHalo);
+
+  const glyphs = { "?": glyphSprite("?"), "!": glyphSprite("!") };
+  for (const sprite of Object.values(glyphs)) {
+    sprite.position.set(1.12, 1.3, 0.3);
+    avatar.add(sprite);
+  }
 
   const dustCount = reducedMotion ? 120 : 420;
   const dustPositions = new Float32Array(dustCount * 3);
@@ -192,8 +253,9 @@ export function createAvatar(canvas) {
   }
   const dustGeo = new THREE.BufferGeometry();
   dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPositions, 3));
+  const dustBase = new THREE.Color(0x8fb6ff);
   const dustMat = new THREE.PointsMaterial({
-    color: 0x8fb6ff, size: 0.03, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending,
+    color: dustBase.clone(), size: 0.03, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending,
   });
   const dust = new THREE.Points(dustGeo, dustMat);
   avatar.add(dust);
@@ -232,10 +294,11 @@ export function createAvatar(canvas) {
 
   // ---------------------------------------------------------------- behaviour
   const s = {
-    mode: "listening", focus: "nocam", tutor: 0, user: 0, tutorS: 0, userS: 0,
+    mode: "listening", focus: "nocam", emotion: "neutral", tutor: 0, user: 0, tutorS: 0, userS: 0,
     blink: 0, nextBlink: 1.5, look: new THREE.Vector2(), glance: new THREE.Vector2(), nextGlance: 1,
-    react: null, reactT: 0, alert: 0, tint: 0.2,
+    react: null, reactT: 0, floatPhase: 0,
   };
+  const face = faceFor("neutral");
   const lookTarget = new THREE.Vector2();
   const clock = new THREE.Clock();
 
@@ -247,8 +310,13 @@ export function createAvatar(canvas) {
     const speaking = s.mode === "speaking";
     const thinking = s.mode === "thinking";
     const hearing = s.mode === "user";
-    const concerned = s.focus === "bad";
-    const drifting = s.focus === "warn";
+
+    // Ease every face parameter toward the current emotion's shape.
+    const target = faceFor(s.emotion);
+    for (const k of Object.keys(NEUTRAL_FACE)) {
+      if (k !== "glyph") face[k] = damp(face[k], target[k], 5, dt);
+    }
+    featureColor.lerp(EMOTION_COLORS[s.emotion] || EMOTION_COLORS.neutral, 1 - Math.exp(-3.5 * dt));
 
     // Reactions to one-off events.
     let bounce = 0;
@@ -256,26 +324,26 @@ export function createAvatar(canvas) {
     if (s.react) {
       s.reactT += dt;
       const k = s.reactT;
-      if (s.react === "nudge" || s.react === "hello") bounce = Math.sin(k * 12) * 0.13 * Math.exp(-k * 2.6);
-      if (s.react === "nudge") s.alert = 1;
-      if (s.react === "interrupt") {
+      if (s.react === "nudge" || s.react === "hello" || s.react === "pop") bounce = Math.sin(k * 12) * 0.13 * Math.exp(-k * 2.6);
+      if (s.react === "interrupt" || s.react === "stomp") {
         shake = Math.sin(k * 38) * 0.06 * Math.exp(-k * 7);
-        if (k < 0.06) s.blink = 1;
+        if (s.react === "interrupt" && k < 0.06) s.blink = 1;
       }
       if (k > 1.6) s.react = null;
     }
-    s.alert = damp(s.alert, concerned ? 0.9 : drifting ? 0.45 : 0, 2.5, dt);
 
     // Body float and head pose.
-    avatar.position.y = 0.22 + Math.sin(t * 1.15) * 0.07 * motion + bounce;
+    s.floatPhase += dt * 1.15 * face.speed;
+    avatar.position.y = 0.22 - face.sink + Math.sin(s.floatPhase) * 0.07 * face.bob * motion + bounce;
     avatar.rotation.y = Math.sin(t * 0.35) * 0.05 * motion;
     const nod = Math.sin(t * 8.5) * s.tutorS * 0.04;
-    head.rotation.x = damp(head.rotation.x, -pointer.y * 0.1 + (thinking ? -0.16 : 0) + (hearing ? 0.07 : 0) + (concerned ? 0.1 : 0) + nod, 5, dt);
+    head.rotation.x = damp(head.rotation.x, -pointer.y * 0.1 + (thinking ? -0.16 : 0) + (hearing ? 0.07 : 0) + face.pitch + nod, 5, dt);
     head.rotation.y = damp(head.rotation.y, pointer.x * 0.3 + (thinking ? 0.22 : 0), 5, dt) + shake;
-    head.rotation.z = damp(head.rotation.z, (hearing ? 0.1 : 0) + (concerned ? -0.06 : 0) + Math.sin(t * 0.8) * 0.02 * motion, 4, dt);
+    head.rotation.z = damp(head.rotation.z, (hearing ? 0.1 : 0) + face.tilt + Math.sin(t * 0.8) * 0.02 * motion, 4, dt);
+    head.position.x = Math.sin(t * 55) * face.tremble * motion;
     head.scale.setScalar(1 + Math.sin(t * 2.2) * 0.008 * motion + s.tutorS * 0.015);
 
-    // Eyes: blink, glance around, expression.
+    // Eyes: blink, glance around, emotion shape.
     s.nextBlink -= dt;
     if (s.nextBlink <= 0) {
       s.blink = 1;
@@ -289,45 +357,67 @@ export function createAvatar(canvas) {
       s.glance.set((Math.random() - 0.5) * 0.06, (Math.random() - 0.5) * 0.035);
     }
     if (thinking) lookTarget.set(0.045, 0.045);
-    else if (concerned) lookTarget.set(0, -0.025);
-    else if (hearing || speaking) lookTarget.set(0, 0);
-    else lookTarget.copy(s.glance);
+    else if (hearing || speaking) lookTarget.set(face.lookX, face.lookY);
+    else lookTarget.set(s.glance.x + face.lookX, s.glance.y + face.lookY);
     s.look.x = damp(s.look.x, lookTarget.x + pointer.x * 0.02, 10, dt);
     s.look.y = damp(s.look.y, lookTarget.y - pointer.y * 0.012, 10, dt);
-    const open = hearing ? 1.18 : thinking ? 0.8 : speaking ? 0.92 + s.tutorS * 0.1 : 1;
-    for (const { eye, side } of eyes) {
+    const open = (hearing ? 1.18 : thinking ? 0.8 : speaking ? 0.92 + s.tutorS * 0.1 : 1) * face.eyeOpen;
+    for (const { eye, arc, brow, side } of eyes) {
+      const arcAmount = side < 0 ? face.arcL : face.arcR;
       eye.position.set(s.look.x, s.look.y, 0);
-      eye.scale.y = Math.max(0.08, lid * open);
-      eye.rotation.z = damp(eye.rotation.z, (concerned ? 0.32 : drifting ? 0.14 : 0) * side, 6, dt);
+      eye.visible = arcAmount < 0.97;
+      eye.scale.y = Math.max(0.05, lid * open * (1 - arcAmount));
+      eye.rotation.z = -side * face.eyeTilt;
+      arc.visible = arcAmount > 0.03;
+      arc.position.set(s.look.x, s.look.y - 0.03, 0);
+      arc.scale.set(arcAmount, Math.max(0.05, arcAmount * lid), 0.35 * arcAmount);
+      // Brows sit above the eyes; the left one also lifts for a quizzical look.
+      brow.position.set(s.look.x * 0.5, face.browLift + (side < 0 ? face.browAsym : 0) + (hearing ? 0.015 : 0), 0);
+      brow.rotation.z = -side * face.brow + (side < 0 ? face.browAsym * 1.5 : 0);
     }
 
-    featureColor.copy(EYE_CALM).lerp(EYE_ALERT, Math.min(1, s.alert));
-    eyeMat.color.copy(featureColor).multiplyScalar(GLOW);
-    barMat.color.copy(featureColor).multiplyScalar(GLOW * 0.9);
-    neckMat.color.copy(featureColor).multiplyScalar(1.6 + s.tutorS * 1.5);
-    earRingMat.color.copy(featureColor).multiplyScalar(1.1 + (hearing ? s.userS * 3.5 : 0) + s.tutorS * 1.5);
+    const glowBoost = face.glow;
+    eyeMat.color.copy(featureColor).multiplyScalar(GLOW * glowBoost);
+    browMat.color.copy(featureColor).multiplyScalar(GLOW * 0.8 * glowBoost);
+    barMat.color.copy(featureColor).multiplyScalar(GLOW * 0.9 * glowBoost);
+    neckMat.color.copy(featureColor).multiplyScalar((1.6 + s.tutorS * 1.5) * glowBoost);
+    earRingMat.color.copy(featureColor).multiplyScalar((1.1 + (hearing ? s.userS * 3.5 : 0) + s.tutorS * 1.5) * glowBoost);
 
-    // Mouth: bars bounce with playback loudness; at rest they form a smile (or a frown when concerned).
+    // Mouth: bars bounce with playback loudness; the emotion curves, opens, slants or wobbles them.
     const quiet = s.tutorS < 0.02;
     bars.forEach(({ bar, shape, phase, speed }, i) => {
       const wobble = 0.62 + 0.38 * Math.sin(t * speed + phase);
-      bar.scale.y = damp(bar.scale.y, quiet ? 0.1 : 0.16 + s.tutorS * 1.9 * shape * wobble, 30, dt);
-      const curve = ((i - 3) / 3) ** 2 * 0.022;
-      bar.position.y = damp(bar.position.y, quiet ? (concerned ? -curve : curve) : 0, 12, dt);
+      const rest = 0.1 + face.mouthOpen * shape * 0.9;
+      bar.scale.y = damp(bar.scale.y, quiet ? rest : 0.16 + s.tutorS * 1.9 * shape * wobble + face.mouthOpen * 0.3 * shape, 30, dt);
+      const edge = (i - 3) / 3;
+      const curve = edge * edge * (quiet ? 0.035 : 0.02) * face.smile;
+      const crooked = edge * face.slant * 0.03 + Math.sin(i * 1.6 + t * 4) * face.wave * 0.012;
+      bar.position.y = damp(bar.position.y, curve + crooked, 12, dt);
     });
 
+    // Glyph: a "?" when confused, a "!" when surprised.
+    for (const [char, sprite] of Object.entries(glyphs)) {
+      const shown = FACE[s.emotion]?.glyph === char;
+      sprite.scale.setScalar(damp(sprite.scale.x, shown ? 0.5 : 0.001, 7, dt));
+      sprite.visible = sprite.scale.x > 0.01;
+      sprite.position.y = 1.3 + Math.sin(t * 3) * 0.05 * motion;
+      sprite.material.rotation = Math.sin(t * 2) * 0.15 * motion;
+      sprite.material.color.copy(featureColor).multiplyScalar(2.2);
+    }
+
     // Antenna, halo, backdrop, dust, rim light.
-    const tipPulse = thinking ? 2.4 + 2.6 * (0.5 + 0.5 * Math.sin(t * 9)) : 2.2 + Math.sin(t * 2) * 0.4;
-    tipMat.color.setRGB(0.71, 0.55, 1).multiplyScalar(tipPulse);
-    const focusColor = FOCUS_COLORS[s.focus] || FOCUS_COLORS.nocam;
-    haloMat.color.lerp(focusColor.clone().multiplyScalar(GLOW * (0.75 + s.tutorS * 0.9)), 1 - Math.exp(-4 * dt));
-    outerHaloMat.color.copy(haloMat.color);
+    const angry = s.emotion === "angry" || s.emotion === "annoyed";
+    const tipPulse = thinking ? 2.4 + 2.6 * (0.5 + 0.5 * Math.sin(t * 9))
+      : angry ? 2.4 + 2.2 * (0.5 + 0.5 * Math.sin(t * 14)) : 2.2 + Math.sin(t * 2) * 0.4;
+    tipMat.color.copy(featureColor).multiplyScalar(tipPulse * glowBoost);
+    haloMat.color.copy(featureColor).multiplyScalar(GLOW * (0.75 + s.tutorS * 0.9) * glowBoost);
     halo.scale.setScalar(1 + s.tutorS * 0.06 + Math.sin(t * 1.6) * 0.01 * motion);
+    outerHaloMat.color.lerp(FOCUS_COLORS[s.focus] || FOCUS_COLORS.nocam, 1 - Math.exp(-4 * dt));
     outerHalo.rotation.z += dt * 0.15 * motion;
-    backdropUniforms.uTint.value.lerp(focusColor, 1 - Math.exp(-3 * dt));
-    s.tint = damp(s.tint, s.focus === "good" ? 0.35 : s.focus === "nocam" ? 0.15 : 0.9, 2, dt);
-    backdropUniforms.uTintAmount.value = s.tint;
-    dust.rotation.y += dt * (thinking ? 0.55 : 0.08) * motion;
+    backdropUniforms.uTint.value.copy(featureColor);
+    backdropUniforms.uTintAmount.value = damp(backdropUniforms.uTintAmount.value, 0.35 + Math.max(0, glowBoost - 1) * 1.6, 2, dt);
+    dust.rotation.y += dt * (thinking ? 0.55 : 0.08 * face.speed) * motion;
+    dustMat.color.copy(dustBase).lerp(featureColor, 0.55);
     dustMat.opacity = 0.35 + s.tutorS * 0.4 + (thinking ? 0.2 : 0);
     rimCyan.intensity = 22 + s.tutorS * 30;
 
@@ -347,6 +437,12 @@ export function createAvatar(canvas) {
     },
     setMode(mode) { s.mode = mode; },
     setFocus(kind) { s.focus = kind; },
+    setEmotion(name) {
+      if (!FACE[name] || name === s.emotion) return;
+      s.emotion = name;
+      if (name === "surprised" || name === "excited") this.react("pop");
+      if (name === "angry") this.react("stomp");
+    },
     react(kind) {
       s.react = kind;
       s.reactT = 0;

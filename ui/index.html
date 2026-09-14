@@ -21,6 +21,11 @@
     <div class="brand"><span class="brand-mark"></span>Tutor<span id="conn" class="conn">offline</span></div>
     <div class="chips">
       <span id="paused" class="chip glass paused" hidden>Auto nudges paused</span>
+      <button type="button" id="session-chip" class="chip glass session-chip" title="Change who you're talking to" hidden>
+        <span id="session-text">Tutor</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h12M4 7l3-3M4 7l3 3M20 17H8m12 0-3-3m3 3-3 3"/></svg>
+      </button>
+      <span id="emotion-chip" class="chip glass emotion-chip" title="How the AI feels right now"><span class="emo-dot"></span><span id="emotion-text">Neutral</span></span>
       <span id="mode" class="chip glass mode" data-mode="listening"><span class="dot"></span><span id="mode-text">Listening</span></span>
     </div>
   </header>
@@ -28,12 +33,14 @@
   <div class="stage-ui">
     <section id="focus-card" class="focus-card glass nocam" aria-label="Focus">
       <div class="focus-top">
-        <span class="focus-label">Focus</span>
+        <span id="focus-label" class="focus-label">Focus</span>
         <span id="focus-state" class="focus-state">Camera off</span>
       </div>
       <div class="focus-score"><span id="focus-score">--</span></div>
+      <div id="presence-text" class="presence-text"></div>
       <div class="meter"><div id="meter-fill" class="meter-fill"></div><div id="meter-threshold" class="meter-threshold"></div></div>
       <div id="focus-detail" class="focus-detail">Waiting for the camera</div>
+      <div id="focus-strikes" class="focus-strikes" hidden></div>
     </section>
 
     <nav id="controls" class="controls glass" aria-label="Call controls">
@@ -155,7 +162,9 @@
         <ul>
           <li><strong>Short clips of your voice</strong><span>Only after you finish speaking, to turn them into text (<span data-p="stt_model">Whisper</span>). If the connection drops, transcription happens on this computer instead.</span></li>
           <li><strong>The conversation as text</strong><span>Your transcribed words, the tutor's recent replies (last <span data-p="history_turns">10</span> exchanges) and matching passages from your course notes, so the tutor can answer.</span></li>
-          <li><strong>Focus nudges, as words</strong><span>When a nudge fires, a short note like "looking down for 12s" and the current topic. Never images or video.</span></li>
+          <li><strong>Your name and what you picked</strong><span>The name you typed and the subject or talk mode from the welcome screen, so the AI can greet you and stay in role.</span></li>
+          <li><strong>What the camera notices, as words</strong><span>While your camera is on, a few words like "smiling, looking at you" go along with what you say, so the AI can react to you. Never images or video.</span></li>
+          <li><strong>Focus nudges, as words</strong><span>Tutor mode only: when a nudge fires, a short note like "looking down for 12s, 2nd time in 10 min" and the current topic.</span></li>
         </ul>
       </section>
 
@@ -176,5 +185,56 @@
       <p class="drawer-foot">Turn the camera or microphone off anytime from the bar at the bottom, or with ⌃⌥V and ⌃⌥M. Off means off: the device is released.</p>
     </div>
   </aside>
+
+  <div id="welcome" class="welcome" hidden>
+    <form id="welcome-form" class="welcome-card" role="dialog" aria-modal="true" aria-labelledby="welcome-title" novalidate>
+      <span class="brand-mark welcome-mark" aria-hidden="true"></span>
+      <p class="welcome-kicker">Welcome</p>
+      <h1 id="welcome-title">Who's here, and what are we doing today?</h1>
+      <label class="field">
+        <span class="field-label">Your name</span>
+        <input id="w-name" type="text" maxlength="40" autocomplete="given-name" placeholder="What should I call you?" required>
+      </label>
+      <label class="field">
+        <span class="field-label">I'd like to</span>
+        <span class="select-wrap">
+          <select id="w-choice" required>
+            <option value="" disabled selected>Pick a subject, or a way to talk</option>
+            <optgroup label="Study with a tutor">
+              <option value="tutor:Mathematics">Mathematics</option>
+              <option value="tutor:Calculus">Calculus</option>
+              <option value="tutor:Physics">Physics</option>
+              <option value="tutor:Chemistry">Chemistry</option>
+              <option value="tutor:Biology">Biology</option>
+              <option value="tutor:Computer Science">Computer Science</option>
+              <option value="tutor:History">History</option>
+              <option value="tutor:Geography">Geography</option>
+              <option value="tutor:English">English</option>
+              <option value="tutor:Economics">Economics</option>
+              <option value="tutor:other">Another subject…</option>
+            </optgroup>
+            <optgroup label="Off topic">
+              <option value="friend">Talk with a friend</option>
+              <option value="therapist">Therapist (a supportive listener)</option>
+              <option value="chat">Just a normal chat</option>
+            </optgroup>
+          </select>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </span>
+      </label>
+      <label id="w-other-field" class="field" hidden>
+        <span class="field-label">Which subject?</span>
+        <input id="w-other" type="text" maxlength="60" placeholder="e.g. Statistics, French, Organic chemistry">
+      </label>
+      <p id="w-note" class="welcome-note" hidden></p>
+      <label class="switch-row">
+        <input id="w-camera" type="checkbox" checked>
+        <span class="switch" aria-hidden="true"></span>
+        <span class="switch-text"><strong>Use my camera</strong><span id="w-camera-note">Optional</span></span>
+      </label>
+      <button id="w-start" class="welcome-start" type="submit" disabled>Start</button>
+      <p class="welcome-foot">Video never leaves this computer. <button type="button" id="w-privacy" class="link-btn">What's shared with the AI?</button></p>
+    </form>
+  </div>
 </body>
 </html>

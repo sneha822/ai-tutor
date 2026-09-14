@@ -1,9 +1,10 @@
 # AI Tutor
 
-A real-time voice tutor that runs entirely on one laptop. You talk to it through your mic, it teaches out loud
-(grounded in your course notes), and it watches your webcam for focus: look at your phone or walk away for too
-long and it warmly pulls you back. Video frames are processed in memory and immediately discarded; nothing is
-saved or sent anywhere.
+A real-time voice AI that runs on one laptop. Pick a subject to study with a tutor, or go off topic with a friend,
+a supportive listener or a normal chat. You talk through your mic, it answers out loud with its feelings showing on an
+animated 3D face, and in tutor mode it watches your webcam for focus: look at your phone or walk away and it pulls you
+back, a little firmer each time it keeps happening. Video frames are processed in memory and immediately discarded;
+only a few words like "smiling, looking at you" ever reach the AI.
 
 Only the LLM call (Groq) needs the network. Speech-to-text falls back to a local model, and text-to-speech,
 speech detection, retrieval and focus detection all run locally.
@@ -66,7 +67,8 @@ or, from a terminal that already has camera/mic permission:
 .venv/bin/python main.py
 ```
 
-Look at the screen for the first 2 seconds (focus calibration), wait for `READY`, and start talking.
+Look at the screen for the first 2 seconds (focus calibration), wait for `READY`, fill in the welcome form on the page
+(your name, and a subject or a way to talk), and start talking. Nothing you say is answered before that.
 
 | Action | Global hotkey | Terminal (type + Enter) |
 |---|---|---|
@@ -76,6 +78,7 @@ Look at the screen for the first 2 seconds (focus calibration), wait for `READY`
 | Recalibrate "looking at the screen" | Ctrl+Option+C | `c` |
 | Microphone on / off | Ctrl+Option+M | `m` |
 | Camera on / off | Ctrl+Option+V | `v` |
+| Start a general tutor session without the page | | `g` |
 | Quit | | `q` |
 
 You can also interrupt just by talking over the tutor. Logs go to the console and `logs/tutor.log`, including
@@ -86,10 +89,15 @@ the focus score every 2 s, every state transition, and a per-turn `LATENCY` / `E
 `main.py` also opens a local page at **http://127.0.0.1:8765** (`UI_PORT` in `config.py`; set
 `UI_OPEN_BROWSER = False` to stop it opening automatically). It's a dark, full-screen view that shows:
 
-- a **3D tutor avatar** (three.js, built from primitives, no model files) whose mouth moves with the loudness of
-  the audio actually playing, which leans in while you talk, looks up while thinking, turns concerned when your
-  focus drops, and follows your mouse. If WebGL isn't available, a glowing orb that pulses with the voice replaces it,
-- a live **focus card** (score, threshold marker, focused / drifting / distracted and why),
+- a **welcome form** first: your name, then a subject (or type your own) or an off-topic mode, and whether to use the
+  camera. The AI greets you by name and says what you're doing today. Switch anytime from the chip at the top right,
+- a **3D avatar** (three.js, built from primitives, no model files) whose mouth moves with the loudness of the audio
+  actually playing, which leans in while you talk, looks up while thinking and follows your mouse. Its **emotion**
+  changes its eyebrows, eyes, mouth, head tilt, motion and colour, with a "?" when confused and a "!" when surprised.
+  If WebGL isn't available, a glowing orb that pulses with the voice replaces it,
+- a **mood chip** with the AI's current emotion, and each reply labelled with the emotion it was said in,
+- a live **focus card** in tutor mode (score, threshold marker, focused / drifting / distracted and why, and how
+  many distractions in the last 10 minutes); in the other modes it shows what the camera notices instead,
 - what the app is doing (listening, you're speaking, thinking, tutor speaking) and whether auto nudges are paused,
 - the conversation, with the tutor's text streaming in and equations rendered by KaTeX,
 - a chip whenever a focus nudge fires (only the reason is shown, never the hidden prompt),
@@ -110,6 +118,26 @@ pause (Force nudge still works). With the mic off, nothing is heard or transcrib
 The page reconnects on its own and replays the conversation after a reload. It only receives scores and text,
 never video. KaTeX and three.js are vendored in `ui/static/`, so equations and the avatar work offline. The server listens on
 localhost only; if the port is busy, the tutor keeps running without the page and logs an error.
+
+## Modes, emotions and the camera
+
+| Mode | How it talks | Camera |
+|---|---|---|
+| **Tutor** (a subject) | Teaches step by step (about 100 words a reply) from your notes. Happy to joke or chat for a moment, then steers back. | **On:** tracks focus. Nudges escalate within 10 minutes: 1st light, 2nd annoyed, 3rd and later properly angry (stern but never insulting). Also checks in if you look puzzled right after an explanation, or keep yawning. **Off:** no focus tracking or nudges. |
+| **Friend** | Casual and short, with real reactions: excited, sad, playful, annoyed if you're rude. | Optional. |
+| **Therapist** | A calm, supportive listener. Says it's an AI and not a real therapist, never gets angry, and points to emergency services or a crisis line if you mention being in danger. | Optional. |
+| **Normal chat** | Talks about anything. | Optional. |
+
+**Emotions.** Every reply starts with a hidden tag such as `[happy]`, chosen by the AI to match the conversation
+(neutral, happy, excited, proud, playful, caring, thoughtful, confused, surprised, sad, annoyed, angry). The tag is
+never spoken or shown; a mid-reply change switches the face when the voice reaches that sentence. After it stops
+talking, the face relaxes to neutral within `EMOTION_HOLD_S`.
+
+**What the camera tells the AI.** While the camera is on, whatever you say is sent with a few words about what the
+camera sees right now: smiling, frowning, yawning, looking away or down, eyes closed, out of view, someone else with
+you. They come from MediaPipe face landmarks and blendshapes, compared with your own neutral face from calibration,
+and the frame is dropped. With the camera on the AI is a little warmer and more attentive; with it off, calmer and
+more neutral.
 
 ## Adding course materials
 
@@ -137,6 +165,13 @@ All focus settings are at the top of `config.py`. The ones you'll touch at a ven
 | `YAW_OK_DEG` / `YAW_MAX_DEG` | 20 / 40 | Same for turning away |
 | `EAR_CLOSED` | 0.12 | Eye openness below this counts as closed |
 | `INTERVENTION_COOLDOWN_S` | 45 | Minimum gap between spoken interventions |
+| `STRIKE_WINDOW_S` | 600 | Distractions this close together make the tutor firmer each time |
+| `SMILE_DELTA` / `FROWN_DELTA` | 0.30 / 0.30 | How far above your neutral face a smile / frown must be to count |
+| `YAWN_JAW_OPEN` / `YAWN_MIN_S` | 0.50 / 1.0 | Jaw opening, held this long, that counts as a yawn |
+| `PUZZLED_CHECKIN_S` | 6 | Frowning this long after an explanation makes the tutor offer to explain it again |
+
+The focus log line also prints the smoothed `smile`, `brow` and `jaw` scores and the words sent to the AI, so you can
+set the expression thresholds between your neutral face and a real smile, frown or yawn.
 
 Measured on the dev laptop: normal posture sat at −7° to −12° of head pitch, phone glances at −14° to −26°, eyes
 open 0.21–0.30 and closed ~0.03.
@@ -188,7 +223,9 @@ tutor/
   tutor.py              RAG context + history + streaming LLM
   llm.py                Groq client (streaming, cancellable, rate-limit fallback)
   rag.py                ChromaDB + MiniLM retrieval over ./materials
-  prompts.py            system prompt and hidden app messages
+  prompts.py            system prompt per mode, emotion rules and hidden app messages
+  session.py            the session from the welcome form (mode, name, subject)
+  emotions.py           emotion tags: the list, and the streaming parser that strips them
   speech_text.py        sentence chunking and LaTeX-to-speech
   hotkeys.py            global hotkeys (physical key matching, works with Option)
   state.py              state shared between the loops
@@ -196,12 +233,12 @@ tutor/
   audio/                mic + VAD, STT, TTS, speaker, device lookup and live switching
 ui/
   index.html            the page
-  static/               app.js, app.css, avatar.js (3D tutor), selfview.js, vendored KaTeX and three.js
+  static/               app.js, app.css, avatar.js (3D face), emotions.js, selfview.js, vendored KaTeX and three.js
 scripts/
   download_models.py    cache all models for offline use
   focus_debug.py        live focus overlay (stage 1)
   focus_check.py        spoken guided focus check with PASS/FAIL report
-  text_chat.py          terminal text tutor (stage 2)
+  text_chat.py          terminal text chat in any mode, e.g. --mode friend --name Sam (stage 2)
   voice_chat.py         voice tutor without the camera (stage 3)
   hotkey_check.py       verifies global hotkeys from the current terminal
   *.command             Terminal.app launchers for the scripts above

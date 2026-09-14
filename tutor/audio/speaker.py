@@ -173,6 +173,13 @@ class Speaker:
             self._drained.clear()
         return True
 
+    def pending_seconds(self) -> float:
+        """Seconds of audio still queued: the rest of the current chunk plus everything after it."""
+        with self._lock:
+            samples = sum(len(c) for c in self._chunks) - self._pos
+            rate = self._rate
+        return max(0, samples) / rate
+
     def play_test(self) -> bool:
         """Play a short chime so the student can hear which device is in use. Skipped while other audio plays."""
         if not self._drained.is_set():

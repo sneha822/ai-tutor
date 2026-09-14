@@ -4,7 +4,10 @@ Conversation loop: utterance -> STT -> tutor (RAG + streaming LLM) -> sentence c
 Interruptible at any point: interrupt() silences playback within one audio block, cancels the LLM stream,
 and drops queued TTS. A new utterance that completes while a turn is still in progress supersedes it, so
 replies are never stale. Focus interventions arrive via intervene() and are spoken like any other turn.
-Logs per-stage latency measured from the moment the user stopped speaking.
+
+Nothing is answered until a session starts (the page's welcome form); begin_session() starts a fresh conversation
+with a spoken greeting. Emotion tags in replies ([happy]) are stripped from speech and text and shown on the face
+when the voice reaches them. Logs per-stage latency measured from the moment the user stopped speaking.
 """
 from __future__ import annotations
 
@@ -19,6 +22,8 @@ import numpy as np
 
 from tutor import prompts
 from tutor.audio.mic import Utterance
+from tutor.emotions import DEFAULT_EMOTION, EmotionTagParser, strip_tags
+from tutor.session import Session
 from tutor.speech_text import SentenceChunker, to_speech
 from tutor.state import SharedState
 
@@ -29,8 +34,20 @@ TARGET_MS = 1500
 
 @dataclass
 class Intervention:
-    message: str          # hidden [SYSTEM: ...] text for the tutor
+    message: str               # hidden [SYSTEM: ...] text for the tutor
     queued_t: float
+    label: str | None = None   # what the page shows ("Focus nudge · ..."); None shows nothing
+
+
+@dataclass
+class SessionStart:
+    session: Session
+    greeting: str              # hidden [SYSTEM: ...] text that makes the AI open the session
+
+
+@dataclass
+class EmotionMark:
+    name: str                  # queued between speech chunks, so the face changes when the voice gets there
 
 
 class VoiceLoop:
@@ -42,7 +59,7 @@ class VoiceLoop:
         self._tts = tts
         self._speaker = speaker
         self._on_event = on_event
-        self._inbox: queue.Queue[Utterance | Intervention | None] = queue.Queue()
+        self._inbox: queue.Queue[Utterance | Intervention | SessionStart | None] = queue.Queue()
         self._cancel = threading.Event()
         self._carry = ""  # transcript of an utterance that was superseded before it could be answered
         self._thread = threading.Thread(target=self._run, name="voice", daemon=True)
@@ -61,13 +78,23 @@ class VoiceLoop:
         s = self._state
         return not (s.turn_active or s.tutor_speaking or s.user_speaking) and self._inbox.empty()
 
-    def intervene(self, message: str, force: bool = False) -> None:
+    def begin_session(self, session: Session, greeting: str) -> None:
+        """Start a fresh conversation: cut off anything in progress, drop stale turns, then greet."""
+        self.interrupt("new session")
+        self._drop_pending()
+        self._state.session = session
+        self._inbox.put(SessionStart(session, greeting))
+
+    def intervene(self, message: str, force: bool = False, label: str | None = None) -> None:
         """Have the tutor respond to a hidden app message. force=True cuts off anything in progress first."""
         if force:
             self.interrupt("forced intervention")
-        self._inbox.put(Intervention(message, time.monotonic()))
+        self._inbox.put(Intervention(message, time.monotonic(), label))
 
     def on_utterance(self, utt: Utterance) -> None:
+        if self._state.session is None:
+            log.info("ignoring speech: no session yet (fill in the welcome form in the page)")
+            return
         if self._state.turn_active:
             # The student finished speaking again while the previous utterance is still being handled
             # (often a pause mid-sentence). Answering the old one afterwards would be stale.
@@ -98,12 +125,29 @@ class VoiceLoop:
         except Exception:
             log.exception("event handler failed (continuing)")
 
+    def _show_emotion(self, name: str) -> None:
+        self._state.emotion = name
+        self._state.emotion_changed_at = time.monotonic()
+        self._emit("emotion", name)
+
     def _end_speaking(self) -> None:
         if self._state.tutor_speaking:
             self._state.tutor_speaking = False
             self._state.playback_ended_at = time.monotonic()
 
-    def _next_item(self) -> Utterance | Intervention | None:
+    def _drop_pending(self) -> None:
+        """Forget queued utterances and interventions (keeping a shutdown request)."""
+        shutdown = False
+        while True:
+            try:
+                shutdown = self._inbox.get_nowait() is None or shutdown
+            except queue.Empty:
+                break
+        if shutdown:
+            self._inbox.put(None)
+        self._carry = ""
+
+    def _next_item(self) -> Utterance | Intervention | SessionStart | None:
         item = self._inbox.get()
         if not isinstance(item, Utterance):
             return item
@@ -114,7 +158,7 @@ class VoiceLoop:
             except queue.Empty:
                 return item
             if not isinstance(nxt, Utterance):
-                self._inbox.put(nxt)   # keep the intervention / shutdown sentinel for the next round
+                self._inbox.put(nxt)   # keep the intervention / session / shutdown sentinel for the next round
                 return item
             log.info("merging queued utterance (%.1fs) into the previous one", nxt.duration_s)
             item = Utterance(np.concatenate([item.audio, nxt.audio]), nxt.speech_end_t, nxt.emitted_t,
@@ -126,7 +170,9 @@ class VoiceLoop:
             if item is None:
                 return
             try:
-                if isinstance(item, Intervention):
+                if isinstance(item, SessionStart):
+                    self._session_turn(item)
+                elif isinstance(item, Intervention):
                     self._intervention_turn(item)
                 else:
                     self._turn(item)
@@ -136,10 +182,14 @@ class VoiceLoop:
                 self._state.turn_active = False
                 self._end_speaking()
 
-    def _turn(self, utt: Utterance) -> None:
+    def _begin_turn(self) -> threading.Event:
         cancel = threading.Event()
         self._cancel = cancel
         self._state.turn_active = True
+        return cancel
+
+    def _turn(self, utt: Utterance) -> None:
+        cancel = self._begin_turn()
         marks: dict[str, float] = {}
 
         text, source, _ = self._stt.transcribe(utt.audio)
@@ -159,15 +209,20 @@ class VoiceLoop:
         self._reply(self._tutor.respond(text, cancel), cancel, marks)
         self._log_latency(utt, source, marks, cancel.is_set())
 
+    def _session_turn(self, item: SessionStart) -> None:
+        self._tutor.start_session(item.session)
+        cancel = self._begin_turn()
+        log.info("greeting for new session: %s", item.session.label())
+        self._reply(self._tutor.respond(item.greeting, cancel, hidden=True), cancel, {})
+
     def _intervention_turn(self, item: Intervention) -> None:
         if self._state.user_speaking:
             log.info("dropping focus intervention: the student started speaking")
             return
-        cancel = threading.Event()
-        self._cancel = cancel
-        self._state.turn_active = True
+        cancel = self._begin_turn()
         log.info("speaking focus intervention: %s", item.message)
-        self._emit("intervention", item.message)
+        if item.label:
+            self._emit("intervention", item.label)
         self._reply(self._tutor.respond(item.message, cancel, hidden=True), cancel, {})
         play = self._speaker.first_play_t
         if play is not None:
@@ -181,20 +236,44 @@ class VoiceLoop:
             self._tutor.mark_last_reply_interrupted()
 
     def _speak_stream(self, deltas: Iterator[str], cancel: threading.Event, marks: dict[str, float]) -> None:
-        chunks: queue.Queue[str | None] = queue.Queue()
+        chunks: queue.Queue[str | EmotionMark | None] = queue.Queue()
         synth = threading.Thread(target=self._synth_worker, args=(chunks, cancel, marks), name="tts", daemon=True)
         self._speaker.reset_marker()
         synth.start()
+        chunker = SentenceChunker()
+        tags = EmotionTagParser()
+        felt = sent = False
 
         def send(chunk: str) -> None:
+            nonlocal sent
             chunk = prompts.strip_markers(chunk)
             if not chunk:
                 return
+            sent = True
             marks.setdefault("chunk_first", time.monotonic())
             chunks.put(chunk)
             self._emit("tutor_chunk", chunk)
 
-        chunker = SentenceChunker()
+        def feel(name: str) -> None:
+            nonlocal felt
+            felt = True
+            for chunk in chunker.flush():   # a tag starts a new sentence
+                send(chunk)
+            if sent:
+                chunks.put(EmotionMark(name))   # mid-reply: change the face when the voice gets there
+            else:
+                self._show_emotion(name)        # opening tag: show it before the words appear
+
+        def take(pieces: list[tuple[str, str]]) -> None:
+            for kind, value in pieces:
+                if kind == "emotion":
+                    feel(value)
+                    continue
+                if not felt and value.strip():
+                    feel(DEFAULT_EMOTION)   # the model forgot its tag
+                for chunk in chunker.feed(value):
+                    send(chunk)
+
         reply = []
         # Keep draining after a cancel: the LLM stream stops at its next token, and the tutor then records
         # the reply in history.
@@ -203,9 +282,9 @@ class VoiceLoop:
                 continue
             marks.setdefault("llm_first", time.monotonic())
             reply.append(delta)
-            for chunk in chunker.feed(delta):
-                send(chunk)
+            take(tags.feed(delta))
         if not cancel.is_set():
+            take(tags.flush())
             for chunk in chunker.flush():
                 send(chunk)
         chunks.put(None)
@@ -215,7 +294,7 @@ class VoiceLoop:
         full = "".join(reply)
         log.info("tutor%s: %r", " (interrupted)" if cancel.is_set() else "", full)
         if not cancel.is_set():
-            self._emit("tutor_done", prompts.strip_markers(full))
+            self._emit("tutor_done", strip_tags(prompts.strip_markers(full)))
 
     def _synth_worker(self, chunks: queue.Queue, cancel: threading.Event, marks: dict[str, float]) -> None:
         while True:
@@ -223,6 +302,9 @@ class VoiceLoop:
             if chunk is None:
                 return
             if cancel.is_set():
+                continue
+            if isinstance(chunk, EmotionMark):
+                self._schedule_emotion(chunk.name, cancel)
                 continue
             spoken = to_speech(chunk)
             if not spoken:
@@ -237,6 +319,21 @@ class VoiceLoop:
             if self._speaker.enqueue(audio, cancel):
                 marks.setdefault("audio_queued", time.monotonic())
                 self._state.tutor_speaking = True
+
+    def _schedule_emotion(self, name: str, cancel: threading.Event) -> None:
+        """Show an emotion once the audio queued ahead of it has played, so the face changes with the voice."""
+        lead = self._speaker.pending_seconds()
+        if lead < 0.05:
+            self._show_emotion(name)
+            return
+
+        def show() -> None:
+            if not cancel.is_set():
+                self._show_emotion(name)
+
+        timer = threading.Timer(lead, show)
+        timer.daemon = True
+        timer.start()
 
     def _log_latency(self, utt: Utterance, source: str, marks: dict[str, float], cancelled: bool) -> None:
         end = utt.speech_end_t

@@ -5,6 +5,10 @@ Plain attributes: each is written by one owner and read by others, which is safe
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tutor.session import Session
 
 
 @dataclass
@@ -19,3 +23,7 @@ class SharedState:
     camera_enabled: bool = True            # False = webcam released, focus tracking and auto nudges paused
     mic_enabled: bool = True               # False = mic released, nothing is transcribed
     last_stt_source: str = ""              # "groq" or "local" for the most recent transcription (privacy panel)
+    session: Session | None = None         # chosen in the page's welcome form; nothing is answered until it's set
+    emotion: str = "neutral"               # the AI's current emotion tag (animates the 3D face)
+    emotion_changed_at: float = 0.0        # monotonic time the emotion last changed
+    distraction_strikes: int = 0           # focus nudges in the last STRIKE_WINDOW_S (tutor mode)

@@ -36,6 +36,16 @@ FOCUS_FPS = 15
 FOCUS_FRAME_WIDTH = 640       # frames are downscaled to this width before inference
 FOCUS_LOG_INTERVAL_S = 2.0    # how often the score is printed to the console
 
+# Expressions (MediaPipe face blendshapes, compared with your face during calibration). Shared with the AI as words
+# like "smiling" while the camera is on. The focus log prints smile/brow/jaw values to tune these.
+SMILE_DELTA = 0.30            # smile score above your neutral face that counts as smiling
+FROWN_DELTA = 0.30            # brow lowering above your neutral face that counts as frowning / puzzled
+YAWN_JAW_OPEN = 0.50          # jaw-open score held this high...
+YAWN_MIN_S = 1.0              # ...for this long counts as a yawn (talking only opens the jaw briefly)
+YAWN_WINDOW_S = 300           # yawns are counted over this window
+OTHER_FACE_MIN_AREA = 0.30    # a second face at least this big (relative to yours) counts as someone with you...
+OTHER_PERSON_MIN_S = 3.0      # ...once it has stayed this long
+
 # =====================================================================
 # LLM (Groq) — only layer that needs network
 # =====================================================================
@@ -105,6 +115,11 @@ HOTKEY_INTERRUPT = "<ctrl>+<alt>+i"
 # =====================================================================
 INTERVENTIONS_ENABLED = True       # automatic interventions on at startup (HOTKEY_TOGGLE_SUPPRESS flips this live)
 INTERVENTION_COOLDOWN_S = 45       # minimum gap between spoken interventions
+STRIKE_WINDOW_S = 600              # distractions this close together escalate: 1st light, 2nd annoyed, 3rd+ angry
+PUZZLED_CHECKIN_S = 6.0            # frowning this long soon after an explanation -> offer to explain it another way
+PUZZLED_AFTER_SPEECH_S = 90        # ...only within this long after the tutor last spoke
+YAWNS_FOR_CHECKIN = 2              # yawns within YAWN_WINDOW_S that prompt a "quick stretch?" check-in
+CHECKIN_COOLDOWN_S = 120           # minimum gap between puzzled/tired check-ins (tutor mode only, like all nudges)
 FORCE_INTERVENTION_REASON = "looking down at their phone for about 30s"   # used when forcing while detection sees nothing
 HOTKEY_FORCE_INTERVENTION = "<ctrl>+<alt>+f"   # guarantee the demo moment: intervene right now
 HOTKEY_TOGGLE_SUPPRESS = "<ctrl>+<alt>+s"      # block/unblock automatic interventions (e.g. bad venue lighting)
@@ -120,3 +135,4 @@ UI_PORT = 8765
 UI_OPEN_BROWSER = True         # open the page in the default browser at startup
 UI_FOCUS_HZ = 5                # focus/status updates pushed to the page per second
 UI_AUDIO_HZ = 30               # voice loudness updates per second (drives the avatar's mouth)
+EMOTION_HOLD_S = 20            # the face keeps the AI's last emotion this long after it stops talking, then relaxes

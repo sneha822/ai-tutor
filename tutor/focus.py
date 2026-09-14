@@ -1,13 +1,17 @@
 """
-Webcam focus detector: MediaPipe Face Landmarker -> rolling focus score (0-100).
+Webcam focus detector: MediaPipe Face Landmarker -> rolling focus score (0-100) plus what the user is doing.
 
-Privacy: each frame is processed in memory and dropped. Nothing is saved or transmitted.
+Privacy: each frame is processed in memory and dropped. Nothing is saved or transmitted; only short words like
+"smiling, looking at you" leave this module.
 
 Signals:
   * head pose (yaw / pitch) from MediaPipe's facial transformation matrix
   * eye aspect ratio (EAR) from eye landmarks -> sustained closure
   * face presence. The detector can't see a face tilted steeply down (phone in lap) or turned past
     ~50 deg, so a face lost right after such a pose is attributed to that pose, not to walking away.
+  * expressions from face blendshapes, compared with the user's own neutral face captured at calibration:
+    smiling, frowning (puzzled), and yawning (jaw held wide open)
+  * a second face in view -> someone else is with the user
 
 The camera can be turned off at runtime (set_enabled): the webcam is released and tracking pauses.
 """
@@ -42,7 +46,9 @@ MODEL_URL = (
 LEFT_EYE = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE = (362, 385, 387, 263, 373, 380)
 NOSE_TIP = 1
-LOST_POSE_WINDOW_S = 1.5  # head-pose history checked when the face disappears
+LOST_POSE_WINDOW_S = 1.5       # head-pose history checked when the face disappears
+EXPRESSION_SMOOTHING_S = 0.4   # time constant for smile / brow / jaw scores
+BASELINE_CAP = 0.25            # a neutral face can't calibrate higher than this (someone smiling at startup)
 
 REASON_TEXT = {
     "looking_down": "looking down (possibly at their phone)",
@@ -50,6 +56,10 @@ REASON_TEXT = {
     "eyes_closed": "eyes closed / drowsy",
     "absent": "not in front of the camera",
 }
+# Observation words for the AI. No parentheses: they end the "(Camera: ...)" note.
+GAZE_TEXT = {"looking_down": "looking down", "looking_away": "looking away", "eyes_closed": "eyes closed"}
+OUT_OF_VIEW_TEXT = {"looking_down": "looking down with their face out of view",
+                    "looking_away": "turned away from the camera"}
 
 
 @dataclass
@@ -67,11 +77,19 @@ class FocusSnapshot:
     unfocused_seconds: float = 0.0
     calibrated: bool = False
     fps: float = 0.0
+    expression: str | None = None     # "smiling" | "frowning" | None (neutral or no face)
+    yawning: bool = False
+    yawns_recent: int = 0             # yawns within YAWN_WINDOW_S
+    other_person: bool = False        # someone else has been in view for a while
+    observation: str = ""             # short words for the AI, e.g. "smiling, looking at you"
 
     def describe(self) -> str:
-        """Human-readable summary for the LLM prompt."""
+        """Human-readable summary of a distraction for the LLM prompt."""
         what = REASON_TEXT.get(self.distraction_reason or "", "not paying attention")
-        return f"{what} for {self.unfocused_seconds:.0f}s"
+        text = f"{what} for {self.unfocused_seconds:.0f}s"
+        if self.other_person and self.distraction_reason in ("looking_away", "looking_down"):
+            text += ", with someone else nearby"
+        return text
 
 
 @dataclass
@@ -102,6 +120,22 @@ def _ear(pts: np.ndarray, idx: tuple[int, ...]) -> float:
     return float((np.linalg.norm(p2 - p6) + np.linalg.norm(p3 - p5)) / (2.0 * horiz))
 
 
+def _face_area(landmarks) -> float:
+    xs = [lm.x for lm in landmarks]
+    ys = [lm.y for lm in landmarks]
+    return (max(xs) - min(xs)) * (max(ys) - min(ys))
+
+
+def _raw_expression(result, index: int) -> dict[str, float]:
+    """Smile, brow-lowering and jaw-open scores (0..1) for one face, or {} without blendshapes."""
+    if not result.face_blendshapes or index >= len(result.face_blendshapes):
+        return {}
+    s = {c.category_name: c.score for c in result.face_blendshapes[index]}
+    return {"smile": (s.get("mouthSmileLeft", 0.0) + s.get("mouthSmileRight", 0.0)) / 2,
+            "brow": (s.get("browDownLeft", 0.0) + s.get("browDownRight", 0.0)) / 2,
+            "jaw": s.get("jawOpen", 0.0)}
+
+
 class FocusDetector:
     def __init__(self, camera_index: int = config.CAMERA_INDEX):
         self.camera_index = camera_index
@@ -116,7 +150,8 @@ class FocusDetector:
         options = vision.FaceLandmarkerOptions(
             base_options=mp_tasks.BaseOptions(model_asset_path=str(ensure_model())),
             running_mode=vision.RunningMode.VIDEO,
-            num_faces=1,
+            num_faces=2,                              # the user plus anyone sitting with them
+            output_face_blendshapes=True,
             output_facial_transformation_matrixes=True,
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
@@ -127,10 +162,15 @@ class FocusDetector:
         self._last_log_t = 0.0
         self._recent_pose: deque[tuple[float, float, float]] = deque(maxlen=90)  # (t, yaw, pitch), calibrated
         self._reason_time: dict[str, float] = {}
+        self._expr = {"smile": 0.0, "brow": 0.0, "jaw": 0.0}   # smoothed scores
+        self._expr_base = {"smile": 0.0, "brow": 0.0}          # the user's neutral face, from calibration
+        self._yawns: deque[float] = deque()
+        self._other_last = float("-inf")
         self._reset_tracking()
 
         self._calib_offset = (0.0, 0.0)   # (yaw, pitch)
         self._calib_samples: list[tuple[float, float]] = []
+        self._calib_expr: list[tuple[float, float]] = []
         self._calib_start: float | None = None
         self._calibrated = False
 
@@ -158,9 +198,10 @@ class FocusDetector:
             log.info("Camera turned OFF: webcam released, focus tracking paused")
 
     def recalibrate(self) -> None:
-        """Treat the next CALIBRATION_SECONDS of head pose as 'looking at the screen'."""
+        """Treat the next CALIBRATION_SECONDS of head pose and expression as 'looking at the screen, neutral'."""
         with self._lock:
             self._calib_samples = []
+            self._calib_expr = []
             self._calib_start = None
             self._calibrated = False
         log.info("Recalibration requested — look at the screen")
@@ -222,18 +263,25 @@ class FocusDetector:
             self._fps = 0.9 * self._fps + 0.1 * (1.0 / dt)
 
         fr = FrameResult(snapshot=FocusSnapshot())
-        face_present = bool(result.face_landmarks)
+        faces = result.face_landmarks
+        face_present = bool(faces)
         yaw = pitch = ear = None
         penalties: dict[str, float] = {}
+        others = 0
 
         if face_present:
             self._last_face_t = now
-            lms = result.face_landmarks[0]
+            areas = [_face_area(f) for f in faces]
+            primary = int(np.argmax(areas))   # the closest face is the user
+            others = sum(1 for i, a in enumerate(areas) if i != primary and a >= config.OTHER_FACE_MIN_AREA * areas[primary])
+            lms = faces[primary]
             pts = np.array([(lm.x * w, lm.y * h) for lm in lms], dtype=np.float32)
             ear = (_ear(pts, LEFT_EYE) + _ear(pts, RIGHT_EYE)) / 2.0
 
-            raw_yaw, raw_pitch, fwd = self._head_pose(result)
-            self._update_calibration(now, raw_yaw, raw_pitch)
+            raw_yaw, raw_pitch, fwd = self._head_pose(result, primary)
+            raw_expr = _raw_expression(result, primary)
+            self._update_calibration(now, raw_yaw, raw_pitch, raw_expr)
+            self._update_expression(now, dt, raw_expr)
             yaw = raw_yaw - self._calib_offset[0]
             pitch = raw_pitch - self._calib_offset[1]
             self._recent_pose.append((now, yaw, pitch))
@@ -255,6 +303,7 @@ class FocusDetector:
             fr.forward = fwd
         else:
             self._eyes_closed_since = None
+            self._jaw_open_since = None
             if now - self._last_face_t > config.FACE_LOST_GRACE_S:
                 penalties[self._lost_face_reason()] = 1.0
 
@@ -295,6 +344,12 @@ class FocusDetector:
                      self._state, new_state, self._score, dominant, unfocused_for)
             self._state = new_state
 
+        while self._yawns and now - self._yawns[0] > config.YAWN_WINDOW_S:
+            self._yawns.popleft()
+        expression = self._expression() if face_present and self._calibrated else None
+        yawning = self._jaw_open_since is not None and now - self._jaw_open_since >= config.YAWN_MIN_S
+        other_person = self._update_other_person(now, others > 0)
+        gaze = reason if penalty >= 0.5 else None
         snap = FocusSnapshot(
             score=round(self._score, 1),
             state=new_state,
@@ -309,6 +364,11 @@ class FocusDetector:
             unfocused_seconds=round(unfocused_for, 1),
             calibrated=self._calibrated,
             fps=round(self._fps, 1),
+            expression=expression,
+            yawning=yawning,
+            yawns_recent=len(self._yawns),
+            other_person=other_person,
+            observation=self._observation(face_present, gaze, expression, yawning, len(self._yawns), other_person),
         )
         with self._lock:
             self._snap = snap
@@ -316,9 +376,11 @@ class FocusDetector:
 
         if now - self._last_log_t >= config.FOCUS_LOG_INTERVAL_S:
             self._last_log_t = now
-            log.info("focus=%3.0f %-10s face=%s yaw=%s pitch=%s ear=%s reason=%s fps=%.0f",
-                     snap.score, snap.state, "Y" if face_present else "N",
-                     snap.yaw, snap.pitch, snap.ear, snap.reason, snap.fps)
+            log.info("focus=%3.0f %-10s face=%s yaw=%s pitch=%s ear=%s reason=%s fps=%.0f | smile=%.2f brow=%.2f "
+                     "jaw=%.2f faces=%d -> %s",
+                     snap.score, snap.state, "Y" if face_present else "N", snap.yaw, snap.pitch, snap.ear,
+                     snap.reason, snap.fps, self._expr["smile"], self._expr["brow"], self._expr["jaw"],
+                     len(faces), snap.observation)
         return fr
 
     # ----------------------------------------------------------------- internal
@@ -332,6 +394,56 @@ class FocusDetector:
         self._unfocused_since: float | None = None
         self._reason_time.clear()
         self._state = "FOCUSED"
+        self._expr = {"smile": 0.0, "brow": 0.0, "jaw": 0.0}
+        self._jaw_open_since: float | None = None
+        self._yawn_counted = False
+        self._other_since: float | None = None
+
+    def _update_expression(self, now: float, dt: float, raw: dict[str, float]) -> None:
+        if not raw:
+            return
+        alpha = 1.0 - math.exp(-dt / EXPRESSION_SMOOTHING_S) if dt > 0 else 1.0
+        for key, value in raw.items():
+            self._expr[key] += alpha * (value - self._expr[key])
+        # Yawn: the jaw held wide open. Uses the raw score so a yawn isn't missed by smoothing.
+        if raw["jaw"] >= config.YAWN_JAW_OPEN:
+            if self._jaw_open_since is None:
+                self._jaw_open_since, self._yawn_counted = now, False
+            elif not self._yawn_counted and now - self._jaw_open_since >= config.YAWN_MIN_S:
+                self._yawn_counted = True
+                self._yawns.append(now)
+                log.info("Yawn detected (%d in the last %.0f min)", len(self._yawns), config.YAWN_WINDOW_S / 60)
+        else:
+            self._jaw_open_since = None
+
+    def _expression(self) -> str | None:
+        if self._expr["smile"] - self._expr_base["smile"] >= config.SMILE_DELTA:
+            return "smiling"
+        if self._expr["brow"] - self._expr_base["brow"] >= config.FROWN_DELTA:
+            return "frowning"
+        return None
+
+    def _update_other_person(self, now: float, seen: bool) -> bool:
+        if seen:
+            self._other_last = now
+            self._other_since = self._other_since or now
+        elif now - self._other_last > config.OTHER_PERSON_MIN_S:
+            self._other_since = None
+        return self._other_since is not None and now - self._other_since >= config.OTHER_PERSON_MIN_S
+
+    @staticmethod
+    def _observation(face_present: bool, gaze: str | None, expression: str | None, yawning: bool, yawns: int,
+                     other_person: bool) -> str:
+        """What the camera sees, in a few words for the AI (no numbers, no parentheses)."""
+        if face_present:
+            parts = ["yawning" if yawning else expression, GAZE_TEXT.get(gaze or "", "looking at you")]
+        else:
+            parts = [OUT_OF_VIEW_TEXT.get(gaze or "", "not in front of the camera" if gaze else "moving out of view")]
+        if yawns >= 2:
+            parts.append(f"has yawned {yawns} times in the last few minutes")
+        if other_person:
+            parts.append("someone else is with them")
+        return ", ".join(p for p in parts if p)
 
     def _lost_face_reason(self) -> str:
         """Why the face vanished, judged from the head pose just before it did."""
@@ -342,25 +454,27 @@ class FocusDetector:
             return "looking_away"
         return "absent"
 
-    def _head_pose(self, result) -> tuple[float, float, tuple[float, float]]:
+    def _head_pose(self, result, index: int = 0) -> tuple[float, float, tuple[float, float]]:
         """Yaw/pitch (degrees) from the face-forward axis of the transformation matrix.
 
         MediaPipe's metric space is right-handed, +Y up, +Z toward the camera. The canonical face
         model looks down +Z, so column 2 of the rotation is where the face is pointing.
         """
-        m = np.asarray(result.facial_transformation_matrixes[0], dtype=np.float64)
+        m = np.asarray(result.facial_transformation_matrixes[index], dtype=np.float64)
         f = m[:3, 2]
         f = f / (np.linalg.norm(f) + 1e-9)
         yaw = math.degrees(math.atan2(f[0], f[2]))
         pitch = config.PITCH_SIGN * math.degrees(math.asin(float(np.clip(f[1], -1.0, 1.0))))
         return yaw, pitch, (float(f[0]), float(-f[1] * config.PITCH_SIGN))
 
-    def _update_calibration(self, now: float, yaw: float, pitch: float) -> None:
+    def _update_calibration(self, now: float, yaw: float, pitch: float, expr: dict[str, float]) -> None:
         if self._calibrated:
             return
         if self._calib_start is None:
             self._calib_start = now
         self._calib_samples.append((yaw, pitch))
+        if expr:
+            self._calib_expr.append((expr["smile"], expr["brow"]))
         if now - self._calib_start < config.CALIBRATION_SECONDS:
             return
         y0, p0 = np.median(np.array(self._calib_samples), axis=0)
@@ -370,6 +484,10 @@ class FocusDetector:
             y0, p0 = 0.0, 0.0
         else:
             log.info("Calibrated neutral pose: yaw=%.1f pitch=%.1f", y0, p0)
+        if self._calib_expr:
+            s0, b0 = np.median(np.array(self._calib_expr), axis=0)
+            self._expr_base = {"smile": float(min(s0, BASELINE_CAP)), "brow": float(min(b0, BASELINE_CAP))}
+            log.info("Calibrated neutral expression: smile=%.2f brow=%.2f", *self._expr_base.values())
         self._calib_offset = (float(y0), float(p0))
         self._calibrated = True
 

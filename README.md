@@ -203,8 +203,11 @@ Also in `config.py`:
 
 ## What happens when things fail
 
-- **No network / Groq STT down:** the local faster-whisper transcript (computed in parallel) is used with no
-  extra delay, and Groq is skipped for 30 s.
+- **No network / Groq STT down:** the local faster-whisper backup starts if Groq hasn't answered within
+  `STT_LOCAL_HEDGE_S` (0.6 s) or fails, its transcript is used, and Groq is skipped for 30 s.
+- **Windows webcam:** Windows lets one program use the camera, so the page's self-view shows small frames the app
+  sends over localhost (`/camera.mjpg`) instead of opening the camera itself. The browser does the same anywhere it
+  finds the camera busy.
 - **Groq rate limit (429):** that turn is retried on `LLM_FALLBACK_MODEL` (gpt-oss-20b), which has its own quota.
 - **LLM unreachable:** the tutor says "Sorry, I lost my connection for a moment" and keeps listening.
 - **Camera missing or blocked:** focus score holds at 100 (no false interventions); the force hotkey still works.
@@ -285,6 +288,15 @@ git push -u origin main
 
 If `.env` is ever committed by mistake, delete that key in the Groq console and create a new one: removing the file
 afterwards doesn't remove it from git history.
+
+## Performance on slower laptops (and Windows)
+
+- CPU thread pools are capped (`tutor/perf.py`), so the voice, speech recognition and face tracking don't fight
+  over cores right when a reply is being spoken. Speech detection uses the single-threaded ONNX Silero model.
+- The camera is read on its own thread keeping only the newest frame (no lag from driver buffering), at
+  `CAMERA_WIDTH`×`CAMERA_HEIGHT`, and tracking drops to `FOCUS_FPS_BUSY` while the AI is thinking or talking.
+- The 3D page renders calm moments at 30 fps and steps down its resolution, then its glow, if the GPU can't keep up.
+- The focus log shows face-tracking time per frame (`infer=`), and every turn logs a `LATENCY` breakdown.
 
 ## Known limitations
 

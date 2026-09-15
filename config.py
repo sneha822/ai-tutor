@@ -34,6 +34,11 @@ CALIBRATION_MAX_OFFSET_DEG = 30  # reject calibration if neutral pose is wilder 
 CAMERA_INDEX = 0
 FOCUS_FPS = 15
 FOCUS_FRAME_WIDTH = 640       # frames are downscaled to this width before inference
+CAMERA_WIDTH = 640            # capture size requested from the webcam: plenty for face tracking, cheap to grab
+CAMERA_HEIGHT = 480
+FOCUS_FPS_BUSY = 6            # tracking rate while the AI is thinking or talking, leaving CPU for its voice
+PREVIEW_FPS = 12              # self-view the app sends to the page when the browser can't open the camera (Windows)
+PREVIEW_WIDTH = 480
 FOCUS_LOG_INTERVAL_S = 2.0    # how often the score is printed to the console
 
 # Expressions (MediaPipe face blendshapes, compared with your face during calibration). Shared with the AI as words
@@ -100,6 +105,7 @@ BARGE_IN_LOOKBACK_MS = 800     # audio before the trigger kept as the start of t
 # Speech-to-text: Groq primary, local faster-whisper always computed in parallel as the fallback
 STT_GROQ_MODEL = "whisper-large-v3-turbo"   # measured ~280-400ms for a 14s clip
 STT_GROQ_TIMEOUT_S = 1.5       # slower than this -> use the local transcript
+STT_LOCAL_HEDGE_S = 0.6        # start the local backup only if Groq hasn't answered by then (saves CPU every turn)
 STT_LOCAL_MODEL = "base"       # CPU int8; measured ~310ms for a 14s clip
 STT_OFFLINE_RETRY_S = 30       # after a Groq STT failure, stay local-only this long
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 import threading
 import time
 import webbrowser
@@ -21,7 +22,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
@@ -130,6 +131,15 @@ class UIServer:
         async def index():
             return FileResponse(UI_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
+        @app.get("/camera.mjpg")
+        async def camera_preview():
+            # Self-view for when the browser can't open the webcam while the app uses it (Windows allows one user).
+            # Localhost only and never stored: small JPEGs of the frames the app is already analysing.
+            if self._detector is None:
+                return Response(status_code=404)
+            return StreamingResponse(self._mjpeg(), media_type="multipart/x-mixed-replace; boundary=frame",
+                                     headers={"Cache-Control": "no-store"})
+
         @app.websocket("/ws")
         async def ws(socket: WebSocket):
             await socket.accept()
@@ -141,7 +151,8 @@ class UIServer:
                 session = self._state.session
                 await socket.send_text(json.dumps({"type": "hello", "events": backlog, "status": self._status(),
                                                    "privacy": self._privacy(), "devices": devices,
-                                                   "session": session.to_dict() if session else None}))
+                                                   "session": session.to_dict() if session else None,
+                                                   "platform": sys.platform}))
                 while True:
                     raw = await socket.receive_text()
                     # In a worker thread: switching an audio device takes a moment and must not stall the pumps.
@@ -267,6 +278,21 @@ class UIServer:
             except Exception:
                 log.exception("focus snapshot for UI failed")
         return status
+
+    async def _mjpeg(self):
+        """Multipart JPEG stream of the app's camera frames, while the page is watching it."""
+        self._detector.add_preview_client()
+        last = None
+        try:
+            while True:
+                jpeg = self._detector.preview_jpeg() if self._state.camera_enabled else None
+                if jpeg is not None and jpeg is not last:
+                    last = jpeg
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpeg)).encode()
+                           + b"\r\n\r\n" + jpeg + b"\r\n")
+                await asyncio.sleep(1.0 / max(1, config.PREVIEW_FPS))
+        finally:
+            self._detector.remove_preview_client()
 
     async def _broadcast(self, message: dict) -> None:
         data = json.dumps(message)

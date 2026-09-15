@@ -33,6 +33,8 @@ def print_event(kind: str, text: str) -> None:
 
 def main() -> None:
     logsetup.setup("voice.log")
+    from tutor import perf
+    perf.limit_threads()
     from tutor.audio.devices import load_saved
     from tutor.audio.mic import MicListener
     from tutor.audio.speaker import Speaker

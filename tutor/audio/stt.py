@@ -1,8 +1,10 @@
 """
-Speech-to-text: Groq Whisper (primary) with a local faster-whisper transcript always computed in parallel.
+Speech-to-text: Groq Whisper (primary) with a local faster-whisper backup.
 
-The local transcript is used when Groq fails, is slower than STT_GROQ_TIMEOUT_S, or failed recently
-(STT_OFFLINE_RETRY_S), so a dead network costs no extra latency. Never raises.
+The backup only starts when Groq hasn't answered within STT_LOCAL_HEDGE_S (or has failed), so normal turns don't
+spend CPU on it while the reply's voice is being generated. The local transcript is used when Groq fails, is slower
+than STT_GROQ_TIMEOUT_S, or failed recently (STT_OFFLINE_RETRY_S); in that last case the backup runs right away.
+Never raises.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ from dotenv import load_dotenv
 from groq import Groq
 
 import config
+from tutor.perf import WHISPER_THREADS
 
 log = logging.getLogger("stt")
 
@@ -43,11 +46,12 @@ class Transcriber:
         t0 = time.time()
         try:
             from faster_whisper import WhisperModel
+            options = {"device": "cpu", "compute_type": "int8", "cpu_threads": WHISPER_THREADS}
             try:
-                model = WhisperModel(config.STT_LOCAL_MODEL, device="cpu", compute_type="int8", local_files_only=True)
+                model = WhisperModel(config.STT_LOCAL_MODEL, local_files_only=True, **options)
             except Exception:
                 log.warning("faster-whisper %s not cached; downloading", config.STT_LOCAL_MODEL)
-                model = WhisperModel(config.STT_LOCAL_MODEL, device="cpu", compute_type="int8")
+                model = WhisperModel(config.STT_LOCAL_MODEL, **options)
             list(model.transcribe(np.zeros(RATE, np.float32), language="en", beam_size=1)[0])
             log.info("local STT (%s) ready in %.1fs", config.STT_LOCAL_MODEL, time.time() - t0)
             return model
@@ -66,28 +70,43 @@ class Transcriber:
         segments, _ = self._local.transcribe(audio, language="en", beam_size=1, condition_on_previous_text=False)
         return " ".join(s.text.strip() for s in segments).strip()
 
+    def _start_local(self, audio: np.ndarray):
+        return self._pool.submit(self._local_stt, audio) if self._local is not None else None
+
     def transcribe(self, audio: np.ndarray) -> tuple[str, str, float]:
         """Return (text, source, milliseconds). Source is groq, local, or none."""
         t0 = time.perf_counter()
-        local = self._pool.submit(self._local_stt, audio) if self._local is not None else None
+        local = None
         text, source = "", "none"
 
         if time.monotonic() >= self._groq_down_until:
             groq = self._pool.submit(self._groq_stt, audio)
-            try:
-                text, source = groq.result(timeout=config.STT_GROQ_TIMEOUT_S), "groq"
-            except FutureTimeout:
-                log.error("GROQ STT SLOW (>%.1fs); using local transcript", config.STT_GROQ_TIMEOUT_S)
-            except Exception as e:
-                self._groq_down_until = time.monotonic() + config.STT_OFFLINE_RETRY_S
-                log.error("GROQ STT FAILED (%s: %s); local-only for %ds",
-                          type(e).__name__, str(e)[:160], config.STT_OFFLINE_RETRY_S)
+            wait = config.STT_LOCAL_HEDGE_S
+            for last_try in (False, True):
+                try:
+                    text, source = groq.result(timeout=wait), "groq"
+                    break
+                except FutureTimeout:
+                    if last_try:
+                        log.error("GROQ STT SLOW (>%.1fs); using local transcript", config.STT_GROQ_TIMEOUT_S)
+                        break
+                    # Slower than usual: start the backup now, but still take Groq's answer if it lands first.
+                    log.info("groq STT not back after %.1fs; starting local backup", wait)
+                    local = self._start_local(audio)
+                    wait = max(0.05, config.STT_GROQ_TIMEOUT_S - config.STT_LOCAL_HEDGE_S)
+                except Exception as e:
+                    self._groq_down_until = time.monotonic() + config.STT_OFFLINE_RETRY_S
+                    log.error("GROQ STT FAILED (%s: %s); local-only for %ds",
+                              type(e).__name__, str(e)[:160], config.STT_OFFLINE_RETRY_S)
+                    break
 
-        if source == "none" and local is not None:
-            try:
-                text, source = local.result(timeout=15), "local"
-            except Exception:
-                log.exception("LOCAL STT FAILED")
+        if source == "none":
+            local = local or self._start_local(audio)
+            if local is not None:
+                try:
+                    text, source = local.result(timeout=15), "local"
+                except Exception:
+                    log.exception("LOCAL STT FAILED")
 
         duration = len(audio) / RATE
         if text.strip().lower() in _HALLUCINATIONS and duration < 2.0:

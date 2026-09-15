@@ -19,13 +19,18 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import sys
 import threading
 import time
 import urllib.request
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Windows: without this, OpenCV's Media Foundation backend can take many seconds to open a camera.
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
 
 import cv2
 import mediapipe as mp
@@ -55,7 +60,8 @@ if sys.platform == "darwin":
     CAMERA_HELP = ("Allow camera access for your terminal app: System Settings > Privacy & Security > Camera, "
                    "then restart.")
 elif sys.platform == "win32":
-    CAMERA_BACKENDS = (cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY)
+    # Media Foundation first: on many webcams it lets Windows share the camera with other apps; DirectShow doesn't.
+    CAMERA_BACKENDS = (cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY)
     CAMERA_HELP = ("Turn on Settings > Privacy & security > Camera > 'Camera access' and 'Let desktop apps access "
                    "your camera', close other apps using the camera (Zoom, Teams, Camera app), then restart. With "
                    "several cameras, try CAMERA_INDEX = 1 in config.py.")
@@ -65,6 +71,7 @@ else:
 LOST_POSE_WINDOW_S = 1.5       # head-pose history checked when the face disappears
 EXPRESSION_SMOOTHING_S = 0.4   # time constant for smile / brow / jaw scores
 BASELINE_CAP = 0.25            # a neutral face can't calibrate higher than this (someone smiling at startup)
+CAMERA_STALL_S = 3.0           # no new frame for this long: reopen the camera
 
 REASON_TEXT = {
     "looking_down": "looking down (possibly at their phone)",
@@ -162,6 +169,16 @@ class FocusDetector:
         self._enabled.set()
         self._thread: threading.Thread | None = None
         self._cap: cv2.VideoCapture | None = None
+        self._grabber: threading.Thread | None = None
+        self._frame_lock = threading.Lock()
+        self._frame_ready = threading.Event()
+        self._latest: np.ndarray | None = None   # newest camera frame, replaced as soon as the next one arrives
+        self._last_frame_t = 0.0
+        self._preview: bytes | None = None       # small JPEG for the page's self-view, only while it's watching
+        self._preview_t = 0.0
+        self._preview_clients = 0
+        self._busy: Callable[[], bool] = lambda: False
+        self._infer_ms = 0.0
 
         options = vision.FaceLandmarkerOptions(
             base_options=mp_tasks.BaseOptions(model_asset_path=str(ensure_model())),
@@ -234,9 +251,13 @@ class FocusDetector:
         self.close_camera()
         self._landmarker.close()
 
+    def set_busy_check(self, busy: Callable[[], bool]) -> None:
+        """While busy() is true (the AI is thinking or talking), track at FOCUS_FPS_BUSY to leave CPU for its voice."""
+        self._busy = busy
+
     def open_camera(self) -> bool:
         self.close_camera()
-        cap = None
+        cap = backend = None
         for backend in CAMERA_BACKENDS:
             candidate = cv2.VideoCapture(self.camera_index, backend)
             if candidate.isOpened():
@@ -247,21 +268,54 @@ class FocusDetector:
             log.error("Could not open camera %d. %s", self.camera_index, CAMERA_HELP)
             self._set_no_camera()
             return False
+        if backend == cv2.CAP_DSHOW:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))   # compressed frames: far faster over USB
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self._cap = cap
         self._reset_tracking()   # a fresh start: no stale "absent" time carried over from before
-        log.info("Camera %d opened", self.camera_index)
+        self._last_frame_t = time.monotonic()
+        self._grabber = threading.Thread(target=self._grab_loop, args=(cap,), name="camera", daemon=True)
+        self._grabber.start()
+        log.info("Camera %d opened (%s, %dx%d)", self.camera_index, cap.getBackendName(),
+                 int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
         return True
 
     def close_camera(self) -> None:
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+        cap, self._cap = self._cap, None
+        grabber, self._grabber = self._grabber, None
+        if grabber is not None and grabber is not threading.current_thread():
+            grabber.join(timeout=2)   # let it finish its current read before the device is released
+        if cap is not None:
+            cap.release()
+        with self._frame_lock:
+            self._latest = None
+            self._frame_ready.clear()
+        self._preview = None
 
-    def read_frame(self) -> np.ndarray | None:
-        if self._cap is None:
+    def read_frame(self, timeout: float = 1.0) -> np.ndarray | None:
+        """The newest frame not returned before, waiting up to `timeout` for one. Older frames are skipped."""
+        if self._cap is None or not self._frame_ready.wait(timeout):
             return None
-        ok, frame = self._cap.read()
-        return frame if ok else None
+        with self._frame_lock:
+            frame, self._latest = self._latest, None
+            self._frame_ready.clear()
+        return frame
+
+    def add_preview_client(self) -> None:
+        with self._frame_lock:
+            self._preview_clients += 1
+
+    def remove_preview_client(self) -> None:
+        with self._frame_lock:
+            self._preview_clients = max(0, self._preview_clients - 1)
+            if not self._preview_clients:
+                self._preview = None
+
+    def preview_jpeg(self) -> bytes | None:
+        """Latest small JPEG for the page's self-view (only produced while a page is watching)."""
+        return self._preview if self._cap is not None else None
 
     def process(self, frame_bgr: np.ndarray, now: float | None = None) -> FrameResult:
         """Run inference on one frame and update the rolling score. The frame is not retained."""
@@ -275,7 +329,9 @@ class FocusDetector:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         ts_ms = max(int((now - self._t0) * 1000), self._last_ts_ms + 1)
         self._last_ts_ms = ts_ms
+        t_infer = time.perf_counter()
         result = self._landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts_ms)
+        self._infer_ms = 0.8 * self._infer_ms + 0.2 * (time.perf_counter() - t_infer) * 1000
         del rgb
 
         dt = 0.0 if self._last_t is None else min(now - self._last_t, 1.0)
@@ -397,11 +453,11 @@ class FocusDetector:
 
         if now - self._last_log_t >= config.FOCUS_LOG_INTERVAL_S:
             self._last_log_t = now
-            log.info("focus=%3.0f %-10s face=%s yaw=%s pitch=%s ear=%s reason=%s fps=%.0f | smile=%.2f brow=%.2f "
-                     "jaw=%.2f faces=%d -> %s",
+            log.info("focus=%3.0f %-10s face=%s yaw=%s pitch=%s ear=%s reason=%s fps=%.0f infer=%.0fms | "
+                     "smile=%.2f brow=%.2f jaw=%.2f faces=%d -> %s",
                      snap.score, snap.state, "Y" if face_present else "N", snap.yaw, snap.pitch, snap.ear,
-                     snap.reason, snap.fps, self._expr["smile"], self._expr["brow"], self._expr["jaw"],
-                     len(faces), snap.observation)
+                     snap.reason, snap.fps, self._infer_ms, self._expr["smile"], self._expr["brow"],
+                     self._expr["jaw"], len(faces), snap.observation)
         return fr
 
     # ----------------------------------------------------------------- internal
@@ -521,8 +577,34 @@ class FocusDetector:
         with self._lock:
             self._snap = FocusSnapshot(state="CAMERA_OFF", camera_ok=False)
 
+    def _grab_loop(self, cap: cv2.VideoCapture) -> None:
+        """Read frames as fast as the camera delivers them and keep only the newest. Without this, frames queued by
+        the driver (Windows especially) make tracking lag seconds behind what the camera sees."""
+        while self._cap is cap and not self._stop.is_set():
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                time.sleep(0.02)
+                continue
+            now = time.monotonic()
+            with self._frame_lock:
+                self._latest = frame
+                self._last_frame_t = now
+                previewing = self._preview_clients > 0
+            self._frame_ready.set()
+            if previewing and now - self._preview_t >= 1.0 / max(1, config.PREVIEW_FPS):
+                self._preview_t = now
+                self._encode_preview(frame)
+
+    def _encode_preview(self, frame: np.ndarray) -> None:
+        h, w = frame.shape[:2]
+        if w > config.PREVIEW_WIDTH:
+            frame = cv2.resize(frame, (config.PREVIEW_WIDTH, int(h * config.PREVIEW_WIDTH / w)),
+                               interpolation=cv2.INTER_AREA)
+        ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if ok:
+            self._preview = jpeg.tobytes()
+
     def _run(self) -> None:
-        period = 1.0 / config.FOCUS_FPS
         while not self._stop.is_set():
             if not self._enabled.is_set():
                 if self._cap is not None:
@@ -535,16 +617,22 @@ class FocusDetector:
                 self._stop.wait(2.0)
                 continue
             t0 = time.monotonic()
-            frame = self.read_frame()
+            frame = self.read_frame(timeout=1.0)
             if frame is None:
-                log.error("Camera read failed; reopening")
-                self.close_camera()
-                self._set_no_camera()
-                self._stop.wait(1.0)
+                if time.monotonic() - self._last_frame_t > CAMERA_STALL_S:
+                    log.error("Camera stopped sending frames; reopening")
+                    self.close_camera()
+                    self._set_no_camera()
+                    self._stop.wait(1.0)
                 continue
             try:
-                self.process(frame, t0)
+                self.process(frame, time.monotonic())
             except Exception:
                 log.exception("Focus processing error (continuing)")
             del frame
+            try:
+                busy = bool(self._busy())
+            except Exception:
+                busy = False
+            period = 1.0 / (config.FOCUS_FPS_BUSY if busy else config.FOCUS_FPS)
             self._stop.wait(max(0.0, period - (time.monotonic() - t0)))

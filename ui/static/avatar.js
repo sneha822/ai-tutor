@@ -287,6 +287,32 @@ export function createAvatar(canvas) {
   window.addEventListener("resize", resize);
   resize();
 
+  // Adaptive quality: slower GPUs (common on Windows laptops) step down to a lower resolution, then no glow, instead
+  // of stuttering and taking CPU from the voice. Calm moments also render at 30 fps instead of 60.
+  const QUALITY = [
+    { ratio: Math.min(window.devicePixelRatio || 1, 1.75), bloom: true },
+    { ratio: 1, bloom: true },
+    { ratio: 1, bloom: false },
+  ];
+  let quality = 0;
+  let lastRender = 0;
+  let sampled = 0;
+  let slowFrames = 0;
+  function trackSpeed(intervalMs, calm) {
+    sampled++;
+    if (intervalMs > (calm ? 45 : 30)) slowFrames++;
+    if (sampled < 90) return;
+    if (slowFrames > sampled / 2 && quality < QUALITY.length - 1) {
+      quality++;
+      renderer.setPixelRatio(QUALITY[quality].ratio);
+      composer.setPixelRatio(QUALITY[quality].ratio);
+      bloom.enabled = QUALITY[quality].bloom;
+      resize();
+      console.info(`avatar: lowered quality to level ${quality} (${QUALITY[quality].ratio}x, glow ${QUALITY[quality].bloom ? "on" : "off"})`);
+    }
+    sampled = slowFrames = 0;
+  }
+
   const pointer = new THREE.Vector2();
   window.addEventListener("pointermove", (e) => {
     pointer.set((e.clientX / window.innerWidth) * 2 - 1, (e.clientY / window.innerHeight) * 2 - 1);
@@ -303,6 +329,11 @@ export function createAvatar(canvas) {
   const clock = new THREE.Clock();
 
   function frame() {
+    const nowMs = performance.now();
+    const calm = s.tutor < 0.01 && s.mode !== "user" && !s.react;
+    if (calm && nowMs - lastRender < 32) return;
+    if (lastRender) trackSpeed(nowMs - lastRender, calm);
+    lastRender = nowMs;
     const dt = Math.min(clock.getDelta(), 0.05);
     const t = clock.elapsedTime;
     s.tutorS = damp(s.tutorS, s.tutor, 22, dt);

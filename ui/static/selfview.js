@@ -15,10 +15,20 @@ export function createSelfView({ send }) {
   const grip = tile.querySelector(".sv-resize");
   const prefs = loadPrefs();
 
+  // Windows lets only one program use the webcam, and the app already has it for focus tracking. There (or wherever
+  // the browser finds the camera busy) the tile shows small frames the app sends over localhost instead.
+  const appImg = document.createElement("img");
+  appImg.className = "sv-app-preview";
+  appImg.alt = "";
+  video.after(appImg);
+
   let stream = null;
   let wanted = false;       // what the app says: camera on or off
   let starting = false;
   let blockedMessage = "";  // set when the browser refuses the camera
+  let appMode = Boolean(prefs.appPreview);
+  let appLive = false;
+  let appWatch = 0;
 
   // ---------------------------------------------------------------- layout
 
@@ -187,12 +197,45 @@ export function createSelfView({ send }) {
   // ---------------------------------------------------------------- camera
 
   function render() {
+    const live = stream !== null || appLive;
+    tile.classList.toggle("app-preview", appMode);
     tile.classList.toggle("cam-off", !wanted);
-    tile.classList.toggle("no-video", wanted && !stream);
-    statusEl.textContent = !wanted ? "Your camera is off" : blockedMessage || (stream ? "" : "Starting camera…");
+    tile.classList.toggle("no-video", wanted && !live);
+    statusEl.textContent = !wanted ? "Your camera is off" : blockedMessage || (live ? "" : "Starting camera…");
+  }
+
+  function startApp() {
+    if (appImg.getAttribute("src")) return;
+    appLive = false;
+    appImg.onerror = () => {
+      stopApp();
+      blockedMessage = "Camera preview unavailable. Click to retry";
+      render();
+    };
+    appImg.src = `/camera.mjpg?t=${Date.now()}`;
+    clearInterval(appWatch);
+    appWatch = setInterval(() => {   // a streamed image doesn't reliably fire "load": wait for its first frame
+      if (appImg.naturalWidth > 0) {
+        appLive = true;
+        clearInterval(appWatch);
+        render();
+      }
+    }, 200);
+    render();
+  }
+
+  function stopApp() {
+    clearInterval(appWatch);
+    appLive = false;
+    appImg.onerror = null;
+    appImg.removeAttribute("src");   // closes the stream
   }
 
   async function start() {
+    if (appMode) {
+      startApp();
+      return;
+    }
     if (stream || starting) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       blockedMessage = "Camera preview isn't available in this browser";
@@ -215,9 +258,17 @@ export function createSelfView({ send }) {
       }
     } catch (err) {
       console.warn("self-view camera unavailable", err);
-      blockedMessage = err && err.name === "NotAllowedError"
-        ? "Allow camera access for this page, then click here"
-        : "Camera preview unavailable. Click to retry";
+      if (err && ["NotReadableError", "TrackStartError", "AbortError"].includes(err.name)) {
+        // The camera is busy, almost always because the app is using it: show the app's frames from now on.
+        appMode = true;
+        prefs.appPreview = true;
+        savePrefs();
+        startApp();
+      } else {
+        blockedMessage = err && err.name === "NotAllowedError"
+          ? "Allow camera access for this page, then click here"
+          : "Camera preview unavailable. Click to retry";
+      }
     } finally {
       starting = false;
       render();
@@ -230,12 +281,26 @@ export function createSelfView({ send }) {
       stream = null;
     }
     video.srcObject = null;
+    stopApp();
   }
 
   place(false);
   render();
 
   return {
+    useAppPreview(on) {
+      // Called before the camera is first switched on, so on Windows the browser never grabs the webcam.
+      if (!on || appMode) return;
+      appMode = true;
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+        video.srcObject = null;
+      }
+      blockedMessage = "";
+      if (wanted) startApp();
+      render();
+    },
     setCameraEnabled(on) {
       if (on === wanted) return;
       wanted = on;

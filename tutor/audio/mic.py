@@ -74,7 +74,9 @@ class MicListener:
 
     def start(self, open_device: bool = True) -> None:
         from silero_vad import load_silero_vad
-        self._vad = load_silero_vad()
+        # ONNX, single-threaded: identical output to the torch version, about half the time per frame, and it
+        # doesn't share torch's thread pool with the voice.
+        self._vad = load_silero_vad(onnx=True)
         if open_device:
             with self._stream_lock:
                 self._stream = self._open()

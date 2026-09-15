@@ -49,6 +49,8 @@ def print_event(kind: str, text: str) -> None:
 
 def main() -> None:
     logsetup.setup("tutor.log")
+    from tutor import perf
+    perf.limit_threads()   # before any model loads: stops the voice, STT and face tracking fighting over cores
     from tutor.audio.devices import AudioDevices, load_saved
     from tutor.audio.mic import MicListener
     from tutor.audio.speaker import Speaker
@@ -68,6 +70,7 @@ def main() -> None:
     try:
         from tutor.focus import FocusDetector
         detector = FocusDetector()
+        detector.set_busy_check(lambda: state.turn_active or state.tutor_speaking)
         detector.start()
     except Exception:
         log.exception("FOCUS DETECTOR UNAVAILABLE; continuing voice-only (force hotkey still works)")

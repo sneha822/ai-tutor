@@ -239,6 +239,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .selfview.dragging { cursor: grabbing; box-shadow: 0 28px 70px rgba(0, 0, 0, .6); }
 .selfview video { display: block; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); pointer-events: none; }
 .selfview.cam-off video, .selfview.no-video video { visibility: hidden; }
+.selfview .sv-app-preview { position: absolute; inset: 0; display: none; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); pointer-events: none; }
+.selfview.app-preview video { display: none; }
+.selfview.app-preview .sv-app-preview { display: block; }
+.selfview.cam-off .sv-app-preview, .selfview.no-video .sv-app-preview { visibility: hidden; }
 
 .sv-placeholder {
   position: absolute;

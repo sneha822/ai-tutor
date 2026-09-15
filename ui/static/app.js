@@ -47,6 +47,7 @@ let devices = null;          // latest microphone/speaker list from the app
 let session = null;          // the running session, or null until the welcome form is sent
 let emotion = "neutral";     // the AI's emotion shown on the face and mood chip
 let replyEmotion = "neutral"; // emotion of the reply being streamed, for its label
+let platform = "";           // the app's OS; on Windows the self-view uses the app's camera frames
 
 import("./avatar.js")
   .then(({ createAvatar }) => {
@@ -62,6 +63,7 @@ import("./avatar.js")
 import("./selfview.js")
   .then(({ createSelfView }) => {
     selfView = createSelfView({ send: sendAction });
+    if (platform) selfView.useAppPreview(platform === "win32");
     if (lastStatus) syncSelfView(lastStatus);
   })
   .catch((err) => console.warn("self-view unavailable", err));
@@ -616,6 +618,8 @@ function connect() {
     } else if (data.type === "notice") {
       showToast(data.text, "info");
     } else if (data.type === "hello") {
+      platform = data.platform || "";
+      selfView?.useAppPreview(platform === "win32");   // before the status below switches the camera on
       convo.querySelectorAll(".msg, .nudge, .divider").forEach((n) => n.remove());
       empty.hidden = false;
       tutorBubble = null;

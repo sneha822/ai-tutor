@@ -31,6 +31,16 @@ from tutor.state import SharedState
 log = logging.getLogger("ui")
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
+
+
+class FreshStaticFiles(StaticFiles):
+    """Static files the browser must revalidate on every load, so an updated app never runs stale page code
+    (an old self-view script grabbing the webcam on Windows, for example)."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 HISTORY_EVENTS = 400   # replayed to a page that connects or reloads mid-session
 DEVICE_ACTIONS = ("list_devices", "set_input_device", "set_output_device", "test_speaker")
 SPEAKER_BUSY = "The tutor is talking right now, so you're already hearing this speaker"
@@ -125,7 +135,7 @@ class UIServer:
                 pump.cancel()
 
         app = FastAPI(title="AI Tutor", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-        app.mount("/static", StaticFiles(directory=UI_DIR / "static"), name="static")
+        app.mount("/static", FreshStaticFiles(directory=UI_DIR / "static"), name="static")
 
         @app.get("/")
         async def index():

@@ -31,6 +31,8 @@ from pathlib import Path
 
 # Windows: without this, OpenCV's Media Foundation backend can take many seconds to open a camera.
 os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+# OpenCV prints a warning for every failed frame read; this module reports camera problems once, readably.
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
 import cv2
 import mediapipe as mp
@@ -56,22 +58,29 @@ NOSE_TIP = 1
 # OpenCV camera backends to try, in order. AVFoundation only exists on macOS; Windows uses DirectShow or Media
 # Foundation, Linux V4L2. CAP_ANY lets OpenCV pick as a last resort.
 if sys.platform == "darwin":
-    CAMERA_BACKENDS = (cv2.CAP_AVFOUNDATION, cv2.CAP_ANY)
+    CAMERA_BACKENDS = (cv2.CAP_AVFOUNDATION,)
     CAMERA_HELP = ("Allow camera access for your terminal app: System Settings > Privacy & Security > Camera, "
                    "then restart.")
 elif sys.platform == "win32":
     # Media Foundation first: on many webcams it lets Windows share the camera with other apps; DirectShow doesn't.
-    CAMERA_BACKENDS = (cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY)
-    CAMERA_HELP = ("Turn on Settings > Privacy & security > Camera > 'Camera access' and 'Let desktop apps access "
-                   "your camera', close other apps using the camera (Zoom, Teams, Camera app), then restart. With "
-                   "several cameras, try CAMERA_INDEX = 1 in config.py.")
+    CAMERA_BACKENDS = (cv2.CAP_MSMF, cv2.CAP_DSHOW)
+    CAMERA_HELP = ("Windows lets one program use the camera: close other tabs showing the tutor page and apps like "
+                   "Zoom, Teams or Camera, then restart. Also check Settings > Privacy & security > Camera > 'Let "
+                   "desktop apps access your camera'. Laptops with face login may need CAMERA_INDEX = 1 in config.py.")
 else:
     CAMERA_BACKENDS = (cv2.CAP_V4L2, cv2.CAP_ANY)
     CAMERA_HELP = "Check that your user can read /dev/video0 (the 'video' group), or try CAMERA_INDEX = 1 in config.py."
 LOST_POSE_WINDOW_S = 1.5       # head-pose history checked when the face disappears
 EXPRESSION_SMOOTHING_S = 0.4   # time constant for smile / brow / jaw scores
 BASELINE_CAP = 0.25            # a neutral face can't calibrate higher than this (someone smiling at startup)
+try:
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)   # in case OpenCV was imported before the env var
+except Exception:
+    pass
+
 CAMERA_STALL_S = 3.0           # no new frame for this long: reopen the camera
+CAMERA_FIRST_FRAME_S = 2.5     # a camera that opens but sends nothing within this long isn't really working
+CAMERA_RETRY_S = 5.0           # wait between attempts when no camera works
 
 REASON_TEXT = {
     "looking_down": "looking down (possibly at their phone)",
@@ -179,6 +188,8 @@ class FocusDetector:
         self._preview_clients = 0
         self._busy: Callable[[], bool] = lambda: False
         self._infer_ms = 0.0
+        self._camera_choice: tuple[int, int, bool] | None = None   # (index, backend, preferred size) that worked
+        self._open_failures = 0
 
         options = vision.FaceLandmarkerOptions(
             base_options=mp_tasks.BaseOptions(model_asset_path=str(ensure_model())),
@@ -256,31 +267,69 @@ class FocusDetector:
         self._busy = busy
 
     def open_camera(self) -> bool:
+        """Open the webcam and make sure it really sends frames.
+
+        Windows cameras often "open" and then deliver nothing: busy in another app, a size the driver can't do, or
+        the infrared face-login camera sitting at index 0. So each backend is tried at our preferred size, then at
+        the camera's own size, then the next camera index; whatever works is remembered for later reopens.
+        """
         self.close_camera()
-        cap = backend = None
-        for backend in CAMERA_BACKENDS:
-            candidate = cv2.VideoCapture(self.camera_index, backend)
-            if candidate.isOpened():
-                cap = candidate
+        indices = [self.camera_index] if self._camera_choice else [self.camera_index, self.camera_index + 1]
+        ways = [(i, b, sized) for i in indices for b in CAMERA_BACKENDS for sized in (True, False)]
+        if self._camera_choice in ways:
+            ways.remove(self._camera_choice)
+            ways.insert(0, self._camera_choice)
+        quiet = self._open_failures > 0   # explain each attempt the first time only
+        for index, backend, sized in ways:
+            if self._stop.is_set():
                 break
-            candidate.release()
-        if cap is None:
-            log.error("Could not open camera %d. %s", self.camera_index, CAMERA_HELP)
-            self._set_no_camera()
-            return False
-        if backend == cv2.CAP_DSHOW:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))   # compressed frames: far faster over USB
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self._cap = cap
-        self._reset_tracking()   # a fresh start: no stale "absent" time carried over from before
-        self._last_frame_t = time.monotonic()
-        self._grabber = threading.Thread(target=self._grab_loop, args=(cap,), name="camera", daemon=True)
-        self._grabber.start()
-        log.info("Camera %d opened (%s, %dx%d)", self.camera_index, cap.getBackendName(),
-                 int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        return True
+            cap = cv2.VideoCapture(index, backend)
+            if not cap.isOpened():
+                cap.release()
+                continue
+            if sized:
+                if backend == cv2.CAP_DSHOW:
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))   # compressed: far faster over USB
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            name = cap.getBackendName()
+            frame = self._first_frame(cap)
+            if frame is None:
+                if not quiet:
+                    log.warning("Camera %d opened with %s%s but sent no frames; trying another way", index, name,
+                                f" at {config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}" if sized else "")
+                cap.release()
+                continue
+            if index != self.camera_index:
+                log.warning("Using camera %d: camera %d sent no frames (set CAMERA_INDEX in config.py to skip this)",
+                            index, self.camera_index)
+                self.camera_index = index
+            self._camera_choice, self._open_failures = (index, backend, sized), 0
+            self._cap = cap
+            self._reset_tracking()   # a fresh start: no stale "absent" time carried over from before
+            with self._frame_lock:
+                self._latest, self._last_frame_t = frame, time.monotonic()
+            self._frame_ready.set()
+            self._grabber = threading.Thread(target=self._grab_loop, args=(cap,), name="camera", daemon=True)
+            self._grabber.start()
+            log.info("Camera %d opened (%s, %dx%d)", index, name, frame.shape[1], frame.shape[0])
+            return True
+        if self._open_failures % 6 == 0:   # about every 30 s while it keeps failing
+            log.error("CAMERA NOT WORKING: no frames from camera %s. %s",
+                      " or ".join(str(i) for i in indices), CAMERA_HELP)
+        self._open_failures += 1
+        self._set_no_camera()
+        return False
+
+    def _first_frame(self, cap: cv2.VideoCapture) -> np.ndarray | None:
+        deadline = time.monotonic() + CAMERA_FIRST_FRAME_S
+        while time.monotonic() < deadline and not self._stop.is_set():
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                return frame
+            time.sleep(0.05)
+        return None
 
     def close_camera(self) -> None:
         cap, self._cap = self._cap, None
@@ -580,11 +629,14 @@ class FocusDetector:
     def _grab_loop(self, cap: cv2.VideoCapture) -> None:
         """Read frames as fast as the camera delivers them and keep only the newest. Without this, frames queued by
         the driver (Windows especially) make tracking lag seconds behind what the camera sees."""
+        failures = 0
         while self._cap is cap and not self._stop.is_set():
             ok, frame = cap.read()
             if not ok or frame is None:
-                time.sleep(0.02)
+                failures += 1
+                time.sleep(0.02 if failures < 25 else 0.25)   # don't hammer a camera that has stopped sending
                 continue
+            failures = 0
             now = time.monotonic()
             with self._frame_lock:
                 self._latest = frame
@@ -614,7 +666,7 @@ class FocusDetector:
                 self._stop.wait(0.2)
                 continue
             if self._cap is None and not self.open_camera():
-                self._stop.wait(2.0)
+                self._stop.wait(CAMERA_RETRY_S)
                 continue
             t0 = time.monotonic()
             frame = self.read_frame(timeout=1.0)

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import math
+import sys
 import threading
 import time
 import urllib.request
@@ -46,6 +47,21 @@ MODEL_URL = (
 LEFT_EYE = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE = (362, 385, 387, 263, 373, 380)
 NOSE_TIP = 1
+
+# OpenCV camera backends to try, in order. AVFoundation only exists on macOS; Windows uses DirectShow or Media
+# Foundation, Linux V4L2. CAP_ANY lets OpenCV pick as a last resort.
+if sys.platform == "darwin":
+    CAMERA_BACKENDS = (cv2.CAP_AVFOUNDATION, cv2.CAP_ANY)
+    CAMERA_HELP = ("Allow camera access for your terminal app: System Settings > Privacy & Security > Camera, "
+                   "then restart.")
+elif sys.platform == "win32":
+    CAMERA_BACKENDS = (cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY)
+    CAMERA_HELP = ("Turn on Settings > Privacy & security > Camera > 'Camera access' and 'Let desktop apps access "
+                   "your camera', close other apps using the camera (Zoom, Teams, Camera app), then restart. With "
+                   "several cameras, try CAMERA_INDEX = 1 in config.py.")
+else:
+    CAMERA_BACKENDS = (cv2.CAP_V4L2, cv2.CAP_ANY)
+    CAMERA_HELP = "Check that your user can read /dev/video0 (the 'video' group), or try CAMERA_INDEX = 1 in config.py."
 LOST_POSE_WINDOW_S = 1.5       # head-pose history checked when the face disappears
 EXPRESSION_SMOOTHING_S = 0.4   # time constant for smile / brow / jaw scores
 BASELINE_CAP = 0.25            # a neutral face can't calibrate higher than this (someone smiling at startup)
@@ -220,10 +236,15 @@ class FocusDetector:
 
     def open_camera(self) -> bool:
         self.close_camera()
-        cap = cv2.VideoCapture(self.camera_index, cv2.CAP_AVFOUNDATION)
-        if not cap.isOpened():
-            log.error("Could not open camera %d (check macOS camera permission for your terminal)",
-                      self.camera_index)
+        cap = None
+        for backend in CAMERA_BACKENDS:
+            candidate = cv2.VideoCapture(self.camera_index, backend)
+            if candidate.isOpened():
+                cap = candidate
+                break
+            candidate.release()
+        if cap is None:
+            log.error("Could not open camera %d. %s", self.camera_index, CAMERA_HELP)
             self._set_no_camera()
             return False
         self._cap = cap

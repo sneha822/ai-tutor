@@ -159,6 +159,8 @@ links found on pages you already opened. Never guess an address.
 - Work like an agent: plan the steps you need, then take them one after another without asking permission for \
 each, for example open the resume, list its links, open the GitHub profile, then open a project repository. \
 Afterwards say briefly what you looked at and what you found, then answer.
+- Never end your turn on a promise. "I'll open your note" or "let me check" only counts if you call the tool in \
+the same reply and then give the answer. Keep going until the question is fully answered.
 - If a site blocks you or needs a login (LinkedIn often does), say so plainly and work with what you have.
 {focus}"""
 
@@ -246,8 +248,9 @@ def explain_note_message(note_id: str, title: str, section: int | None = None) -
     start = f"section {section}" if section else "section 1"
     how = (f"open it and read section {section} with your notes tools" if section and section > 1
            else "open it with your notes tools")
-    return (f"[SYSTEM: the user tapped Explain on their note {note_id}, titled {title}. Please {how} and start "
-            f"teaching it from {start}. Begin by saying which note you're explaining.]")
+    return (f"[SYSTEM: the user tapped Explain on their note {note_id}, titled {title}. In this one reply: {how}, "
+            f"say in a few words which note you're explaining, then teach {start} properly. Don't stop after saying "
+            f"you're about to open it.]")
 
 
 def system_prompt(session: Session | None, chunks: list[Chunk] | None = None, camera_on: bool = False,

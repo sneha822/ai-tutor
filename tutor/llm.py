@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -24,6 +25,20 @@ from tutor import providers
 log = logging.getLogger("llm")
 
 _EFFORT_ORDER = ("low", "medium", "high")
+# "I'll open your note", "let me check", "one sec" - said without actually calling a tool.
+_PROMISE = re.compile(r"\b(?:i'?ll|i will|let me|i'?m going to|i am going to|going to)\b[^.!?\n]{0,40}?"
+                      r"\b(?:open|read|check|look|pull|fetch|find|search|dig|review|start with|grab|walk through|"
+                      r"go through|take a look|explain)\b"
+                      r"|\b(?:hold on|one (?:sec|second|moment)|give me a (?:sec|second|moment)|bear with me)\b", re.I)
+_CARRY_ON = "[SYSTEM: You said you were about to do something but didn't do it. Do it now, in this same reply{how}. Don't announce it again.]"
+_CARRY_ON_TOOLS = ": call the tools you need, then give the full answer"
+MAX_CARRY_ONS = 2
+
+
+def _only_promised(text: str) -> bool:
+    """True when a reply just announces an action (so the model stopped before doing the work)."""
+    text = text.strip()
+    return bool(text) and len(text) < 400 and _PROMISE.search(text) is not None
 
 
 class LLMError(Exception):
@@ -124,6 +139,7 @@ class LLMClient:
         effort = effort or config.LLM_REASONING_EFFORT
         messages = list(messages)
         used_tools: list[str] = []
+        carry_ons = 0
         answered = False
         pos = [self._first_route()]
         route = self.routes[pos[0]]
@@ -174,6 +190,17 @@ class LLMClient:
                 finally:
                     resp.close()
                 if not calls:
+                    if carry_ons < MAX_CARRY_ONS and _only_promised("".join(said)):
+                        # It said "I'll open your note" and stopped: make it do the work in this same turn.
+                        carry_ons += 1
+                        messages.append({"role": "assistant", "content": "".join(said)})
+                        messages.append({"role": "system", "content": _CARRY_ON.format(
+                            how=_CARRY_ON_TOOLS if offered else "")})
+                        log.info("model announced an action without taking it; carrying the turn on")
+                        think("step", {"id": f"{round_no}.c", "label": "carrying on", "status": "done"})
+                        if said and not said[-1].endswith((" ", "\n")):
+                            yield " "
+                        continue
                     break
                 if cancel is not None and cancel.is_set():
                     return

@@ -213,7 +213,7 @@ def voice() -> None:
     tts_module.config.TTS_ENGINE = "local"   # time the backup voice on this computer
     t0 = time.perf_counter()
     tts = tts_module.TTS()
-    out(f"  Voice (Kokoro) loads in {ms(t0):.0f}ms")
+    out(f"  Voice (Piper) loads in {ms(t0):.0f}ms")
     for text in ("Sure, let me explain that.",
                  "The chain rule helps us differentiate a function that sits inside another function.",
                  "Think of it in layers: differentiate the outer layer while leaving the inside alone, then multiply "

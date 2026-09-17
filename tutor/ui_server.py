@@ -302,7 +302,7 @@ class UIServer:
                 "stt_model": config.STT_GROQ_MODEL, "stt_local": f"faster-whisper {config.STT_LOCAL_MODEL}",
                 "history_turns": config.HISTORY_TURNS,
                 "tts": (f"Groq {config.TTS_GROQ_MODEL.split('/')[-1]}, voice {config.TTS_GROQ_VOICE}"
-                        if tts_engine() == "groq" else f"Kokoro-82M on this computer, voice {config.TTS_VOICE}"),
+                        if tts_engine() == "groq" else f"Piper on this computer, voice {config.TTS_VOICE}"),
                 "notes_vision": providers.describe("vision")}
 
     @staticmethod

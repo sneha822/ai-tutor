@@ -9,7 +9,7 @@ from pathlib import Path
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 
 _NOISY = ("httpx", "httpcore", "urllib3", "sentence_transformers", "chromadb", "huggingface_hub",
-          "faster_whisper", "phonemizer", "numba", "spacy", "uvicorn")
+          "faster_whisper", "numba", "uvicorn")
 
 
 def setup(log_file: str | None = None, level: int = logging.INFO) -> None:
@@ -33,6 +33,5 @@ def setup(log_file: str | None = None, level: int = logging.INFO) -> None:
         root.addHandler(fh)
     for name in _NOISY:
         logging.getLogger(name).setLevel(logging.WARNING)
-    logging.getLogger("phonemizer").setLevel(logging.ERROR)  # warns once per phoneme on any non-English text
     warnings.filterwarnings("ignore", category=FutureWarning)
     warnings.filterwarnings("ignore", category=UserWarning, module=r"torch.*")

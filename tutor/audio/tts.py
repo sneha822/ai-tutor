@@ -2,11 +2,10 @@
 The tutor's voice.
 
 TTS_ENGINE = "groq": Groq's Orpheus voice turns each sentence into speech. It's fast on any laptop, and several
-sentences can be requested at once (TTS_PARALLEL). If Groq fails, Kokoro-82M on this computer takes over; it is
-loaded only when first needed (TTS_LOCAL_PRELOAD = False), because it takes ~1.2 GB of RAM and a while to load.
-While it loads, sentences are shown but not spoken.
+sentences can be requested at once (TTS_PARALLEL). If Groq fails, Piper on this computer takes over: a small ONNX
+voice that loads in well under a second and speaks a sentence in ~0.1s on any laptop, CPU only.
 
-TTS_ENGINE = "local": Kokoro only (fully offline; needs a fast CPU, ~0.1x real time on Apple Silicon).
+TTS_ENGINE = "local": Piper only (fully offline, no API key needed).
 """
 from __future__ import annotations
 
@@ -57,6 +56,18 @@ def _resample(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
     return np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio).astype(np.float32)
 
 
+def local_voice_path(download: bool = False) -> Path:
+    """Where this computer's Piper voice lives (models/piper/<voice>.onnx), optionally downloading it first."""
+    folder = ROOT / "models" / "piper"
+    path = folder / f"{config.TTS_VOICE}.onnx"
+    if download and not path.is_file():
+        from piper.download_voices import download_voice
+        folder.mkdir(parents=True, exist_ok=True)
+        log.info("downloading the local voice %s...", config.TTS_VOICE)
+        download_voice(config.TTS_VOICE, folder)
+    return path
+
+
 def engine() -> str:
     """"groq" or "local": this computer's choice ("tts_engine" in local_settings.json), else config.TTS_ENGINE."""
     choice = local_settings.load().get("tts_engine")
@@ -84,7 +95,7 @@ class TTS:
         self.parallel = config.TTS_PARALLEL if self.engine == "groq" else 1
         self.source = ""                        # "groq" or "local", for the last sentence spoken
         self._local = None
-        self._local_lock = threading.Lock()     # Kokoro isn't safe to call from two threads at once
+        self._local_lock = threading.Lock()     # one Piper session, used by one thread at a time
         self._local_loading = threading.Event()
         self._down_until = 0.0
         self._groq = None
@@ -94,8 +105,10 @@ class TTS:
             self._groq = Groq(api_key=os.getenv("GROQ_API_KEY") or "missing", max_retries=0,
                               timeout=config.TTS_GROQ_TIMEOUT_S)
             threading.Thread(target=self._warm_up, name="tts-warmup", daemon=True).start()
-        if self.engine != "groq" or config.TTS_LOCAL_PRELOAD:
+        if self.engine != "groq":
             self._load_local()
+        elif config.TTS_LOCAL_PRELOAD:
+            self._start_local_load()
 
     # ------------------------------------------------------------------ public
 
@@ -153,7 +166,7 @@ class TTS:
             self._down_until = time.monotonic() + wait
         self._start_local_load()
 
-    # ------------------------------------------------------------------ Kokoro (local)
+    # ------------------------------------------------------------------ Piper (local)
 
     def _start_local_load(self) -> None:
         if self._local is None and not self._local_loading.is_set():
@@ -164,21 +177,26 @@ class TTS:
         self._local_loading.set()
         t0 = time.time()
         try:
-            from kokoro import KPipeline
-            pipe = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", device="cpu")
+            from piper import PiperVoice
+            voice = PiperVoice.load(local_voice_path())
             with self._local_lock:
-                self._local = pipe
-            self._kokoro("Ready.")
-            log.info("local voice (Kokoro) ready in %.1fs (voice %s)", time.time() - t0, config.TTS_VOICE)
+                self._local = voice
+            self._piper("Ready.")
+            log.info("local voice (Piper) ready in %.1fs (voice %s)", time.time() - t0, config.TTS_VOICE)
         except Exception:
-            log.exception("LOCAL VOICE UNAVAILABLE")
+            log.exception("LOCAL VOICE UNAVAILABLE (run scripts/download_models.py to fetch it)")
             self._local_loading.clear()
 
-    def _kokoro(self, text: str) -> np.ndarray:
+    def _piper(self, text: str) -> np.ndarray:
+        from piper import SynthesisConfig
+        # length_scale stretches time, so it's the inverse of speed.
+        options = SynthesisConfig(length_scale=1.0 / config.TTS_SPEED if config.TTS_SPEED else 1.0)
         with self._local_lock:
-            parts = [r.audio.detach().cpu().numpy()
-                     for r in self._local(text, voice=config.TTS_VOICE, speed=config.TTS_SPEED) if r.audio is not None]
-        return np.concatenate(parts).astype(np.float32) if parts else np.zeros(0, np.float32)
+            chunks = list(self._local.synthesize(text, options))
+        if not chunks:
+            return np.zeros(0, np.float32)
+        audio = np.concatenate([c.audio_float_array for c in chunks]).astype(np.float32)
+        return _resample(audio, chunks[0].sample_rate, RATE)
 
     def _local_tts(self, text: str) -> np.ndarray:
         if self._local is None:
@@ -186,4 +204,4 @@ class TTS:
             log.warning("no voice yet for %r (the local voice is still loading)", re.sub(r"\s+", " ", text)[:40])
             return np.zeros(0, np.float32)
         self.source = "local"
-        return self._kokoro(text)
+        return self._piper(text)

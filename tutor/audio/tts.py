@@ -34,6 +34,22 @@ TERMS_URL = "https://console.groq.com/playground?model=" + config.TTS_GROQ_MODEL
 TERMS_RETRY_S = 600
 
 
+_RETRY_IN = re.compile(r"try again in\s+(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", re.I)
+
+
+def _retry_after(message: str) -> float:
+    """Seconds to wait, from Groq's "Please try again in 4m48s" (0 if it didn't say). Capped at an hour."""
+    m = _RETRY_IN.search(message)
+    if not m or not any(m.groups()):
+        return 0.0
+    h, mins, secs = (float(g or 0) for g in m.groups())
+    return min(h * 3600 + mins * 60 + secs + 1, 3600)
+
+
+def _friendly(seconds: float) -> str:
+    return f"{seconds / 60:.0f} min" if seconds >= 90 else f"{seconds:.0f}s"
+
+
 def _resample(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
     if src == dst or len(audio) == 0:
         return audio
@@ -123,8 +139,12 @@ class TTS:
             log.error("GROQ VOICE NEEDS ONE-TIME TERMS ACCEPTANCE: open %s (as the Groq org owner) and accept. "
                       "Using the voice on this computer meanwhile.", TERMS_URL)
         elif "429" in message or "rate" in message.lower():
-            wait = config.TTS_OFFLINE_RETRY_S
-            log.error("GROQ VOICE RATE LIMITED; using the voice on this computer for %ds", wait)
+            # Groq says when the quota frees up ("try again in 4m48s"); the free tier's daily cap is ~3600 tokens
+            # per voice model, about an hour of speech.
+            wait = _retry_after(message) or config.TTS_OFFLINE_RETRY_S
+            log.error("GROQ VOICE RATE LIMITED (%s); using the voice on this computer for %s",
+                      "daily quota used up" if "per day" in message or "TPD" in message else "too many requests",
+                      _friendly(wait))
         else:
             wait = config.TTS_OFFLINE_RETRY_S
             log.error("GROQ VOICE FAILED (%s: %s); using the voice on this computer for %ds",

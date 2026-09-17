@@ -259,7 +259,7 @@ Also in `config.py`:
 
 `TTS_ENGINE = "groq"` (default) uses Groq's Orpheus voice (`TTS_GROQ_VOICE`: autumn, diana, hannah, austin, daniel,
 troy). It needs a one-time terms acceptance at
-<https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english>. Sentences are requested
+<https://console.groq.com/playground?model=canopylabs%2Forpheus-arabic-saudi>. Sentences are requested
 `TTS_PARALLEL` at a time and played in order; measured ~0.75 s for a short sentence, on any laptop. The Kokoro backup
 is only loaded if Groq fails, which saves ~1.2 GB of RAM.
 

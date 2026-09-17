@@ -25,7 +25,7 @@ The tutor's "brain" runs on Groq. The API key is like a password that lets the a
    and keep the key (starts with `nvapi-`) for step 5. The tutor then uses NVIDIA NIM for its replies and for
    reading notes, and Groq as the backup. Without it, everything runs on Groq.
 5. **Turn on the tutor's voice:** open
-   <https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english> and accept the terms for the Orpheus
+   <https://console.groq.com/playground?model=canopylabs%2Forpheus-arabic-saudi> and accept the terms for the Orpheus
    voice model (a one-time click). Without this, the tutor falls back to a slower voice that runs on your computer.
 
 Never share this key or post it online.

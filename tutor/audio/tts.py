@@ -29,7 +29,8 @@ log = logging.getLogger("tts")
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 RATE = 24000
-TERMS_URL = "https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english"
+# Each Orpheus model has its own one-time terms acceptance, so the link follows TTS_GROQ_MODEL.
+TERMS_URL = "https://console.groq.com/playground?model=" + config.TTS_GROQ_MODEL.replace("/", "%2F")
 TERMS_RETRY_S = 600
 
 

@@ -20,9 +20,12 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import re
+from urllib.parse import unquote
+
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
@@ -48,8 +51,9 @@ SPEAKER_BUSY = "The tutor is talking right now, so you're already hearing this s
 
 class UIServer:
     def __init__(self, state: SharedState, detector=None, actions: dict[str, Callable[[], None]] | None = None,
-                 devices=None, param_actions: dict[str, Callable[[dict], None]] | None = None):
+                 devices=None, param_actions: dict[str, Callable[[dict], None]] | None = None, notes=None):
         self._state = state
+        self._notes = notes   # tutor.notes.NotesTools, for the Notes section
         self._detector = detector
         self._actions = actions or {}
         self._param_actions = param_actions or {}   # actions that take the page's message, e.g. start_session
@@ -104,11 +108,29 @@ class UIServer:
             event = self._event(kind, text)
             if event is None:
                 return
-            with self._history_lock:
-                self._history.append(event)
+            if not event.pop("_transient", False):   # live reasoning chunks aren't replayed; "end" has it all
+                with self._history_lock:
+                    self._history.append(event)
             self._broadcast_threadsafe(event)
         except Exception:
             log.exception("UI publish failed (continuing)")
+
+    def notify_notes(self) -> None:
+        """The notes list changed (added, read, deleted): send it to every page."""
+        self._broadcast_threadsafe({"type": "notes", "notes": self._notes_list()})
+
+    def note_event(self, focus: dict | None, reading: bool) -> None:
+        """The AI opened or read a note (reading=True), or stopped working from one."""
+        self._broadcast_threadsafe({"type": "note_focus", "focus": focus, "reading": reading})
+
+    def _notes_list(self) -> list[dict]:
+        if self._notes is None:
+            return []
+        try:
+            return [self._notes.library.public(n) for n in self._notes.library.list()]
+        except Exception:
+            log.exception("notes list for UI failed")
+            return []
 
     def _broadcast_threadsafe(self, message: dict) -> None:
         loop = self._loop
@@ -141,6 +163,42 @@ class UIServer:
         async def index():
             return FileResponse(UI_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
+        @app.post("/notes")
+        async def add_note(request: Request):
+            if self._notes is None:
+                return JSONResponse({"error": "Notes aren't available right now."}, status_code=503)
+            size = int(request.headers.get("content-length") or 0)
+            if size > config.NOTES_MAX_MB * 1024 * 1024:
+                return JSONResponse({"error": f"That file is bigger than {config.NOTES_MAX_MB} MB."}, status_code=413)
+            filename = unquote(request.headers.get("x-filename", ""))
+            data = await request.body()
+            try:
+                note = await asyncio.to_thread(self._notes.library.add, filename, data)
+            except Exception as e:
+                from tutor.notes import NoteError
+                if not isinstance(e, NoteError):
+                    log.exception("note upload failed")
+                return JSONResponse({"error": str(e) if isinstance(e, NoteError) else "Couldn't save that file."},
+                                    status_code=400)
+            log.info("UI note added: %s", note.filename)
+            return self._notes.library.public(note)
+
+        @app.delete("/notes/{note_id}")
+        async def delete_note(note_id: str):
+            if self._notes is None or not re.fullmatch(r"[0-9a-f]{6}", note_id):
+                return Response(status_code=404)
+            deleted = await asyncio.to_thread(self._notes.library.delete, note_id)
+            if deleted and (self._notes.focus or {}).get("note_id") == note_id:
+                self._notes.clear()
+            return Response(status_code=204 if deleted else 404)
+
+        @app.get("/notes/{note_id}/pages/{page}.jpg")
+        async def note_page(note_id: str, page: int):
+            path = self._notes.library.page_image(note_id, page) if self._notes is not None else None
+            if path is None:
+                return Response(status_code=404)
+            return FileResponse(path, headers={"Cache-Control": "no-cache"})
+
         @app.get("/camera.mjpg")
         async def camera_preview():
             # Self-view for when the browser can't open the webcam while the app uses it (Windows allows one user).
@@ -162,7 +220,7 @@ class UIServer:
                 await socket.send_text(json.dumps({"type": "hello", "events": backlog, "status": self._status(),
                                                    "privacy": self._privacy(), "devices": devices,
                                                    "session": session.to_dict() if session else None,
-                                                   "platform": sys.platform}))
+                                                   "platform": sys.platform, "notes": self._notes_list()}))
                 while True:
                     raw = await socket.receive_text()
                     # In a worker thread: switching an audio device takes a moment and must not stall the pumps.
@@ -240,7 +298,8 @@ class UIServer:
         """Facts for the page's privacy panel, taken from the live configuration."""
         return {"llm_model": config.LLM_MODEL, "llm_fallback": config.LLM_FALLBACK_MODEL,
                 "stt_model": config.STT_GROQ_MODEL, "stt_local": f"faster-whisper {config.STT_LOCAL_MODEL}",
-                "history_turns": config.HISTORY_TURNS, "tts": f"Kokoro-82M, voice {config.TTS_VOICE}"}
+                "history_turns": config.HISTORY_TURNS, "tts": f"Kokoro-82M, voice {config.TTS_VOICE}",
+                "notes_vision": config.NOTES_VISION_MODEL}
 
     @staticmethod
     def _event(kind: str, text: str) -> dict | None:
@@ -253,6 +312,14 @@ class UIServer:
             return {"type": "interrupted", "source": text, "t": t}
         if kind == "intervention":   # only the label reaches the page, never the hidden [SYSTEM: ...] text
             return {"type": "nudge", "reason": text, "t": t}
+        if kind == "action":
+            return {"type": "action", "label": text, "t": t}
+        if kind == "think":
+            data = json.loads(text)
+            event = {**data, "type": "think", "t": t}
+            if data.get("kind") == "reasoning":
+                event["_transient"] = True
+            return event
         if kind == "emotion":
             return {"type": "emotion", "emotion": text, "t": t}
         if kind == "session":
@@ -276,7 +343,8 @@ class UIServer:
                   "stt_source": s.last_stt_source, "threshold": config.FOCUS_THRESHOLD, "focus": None,
                   "session": session.to_dict() if session else None, "emotion": self._emotion(),
                   "strikes": s.distraction_strikes,
-                  "focus_tracking": bool(session and session.tutoring and s.camera_enabled)}
+                  "focus_tracking": bool(session and session.tutoring and s.camera_enabled),
+                  "note_focus": self._notes.public_focus() if self._notes is not None else None}
         if self._detector is not None:
             try:
                 snap = self._detector.snapshot()

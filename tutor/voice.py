@@ -37,12 +37,18 @@ class Intervention:
     message: str               # hidden [SYSTEM: ...] text for the tutor
     queued_t: float
     label: str | None = None   # what the page shows ("Focus nudge · ..."); None shows nothing
+    kind: str = "nudge"        # "nudge" (focus) or "action" (something the user asked for, like Explain)
 
 
 @dataclass
 class SessionStart:
     session: Session
     greeting: str              # hidden [SYSTEM: ...] text that makes the AI open the session
+
+
+@dataclass
+class TextTurn:
+    text: str                  # a message typed in the page (or a suggested question clicked)
 
 
 @dataclass
@@ -59,7 +65,7 @@ class VoiceLoop:
         self._tts = tts
         self._speaker = speaker
         self._on_event = on_event
-        self._inbox: queue.Queue[Utterance | Intervention | SessionStart | None] = queue.Queue()
+        self._inbox: queue.Queue[Utterance | Intervention | SessionStart | TextTurn | None] = queue.Queue()
         self._cancel = threading.Event()
         self._carry = ""  # transcript of an utterance that was superseded before it could be answered
         self._thread = threading.Thread(target=self._run, name="voice", daemon=True)
@@ -85,11 +91,20 @@ class VoiceLoop:
         self._state.session = session
         self._inbox.put(SessionStart(session, greeting))
 
-    def intervene(self, message: str, force: bool = False, label: str | None = None) -> None:
+    def intervene(self, message: str, force: bool = False, label: str | None = None, kind: str = "nudge") -> None:
         """Have the tutor respond to a hidden app message. force=True cuts off anything in progress first."""
         if force:
-            self.interrupt("forced intervention")
-        self._inbox.put(Intervention(message, time.monotonic(), label))
+            self.interrupt("forced intervention" if kind == "nudge" else "user action")
+        self._inbox.put(Intervention(message, time.monotonic(), label, kind))
+
+    def ask(self, text: str) -> bool:
+        """A typed message: answered like speech, cutting off a reply in progress."""
+        if self._state.session is None:
+            log.info("ignoring typed message: no session yet")
+            return False
+        self.interrupt("typed message")
+        self._inbox.put(TextTurn(text))
+        return True
 
     def on_utterance(self, utt: Utterance) -> None:
         if self._state.session is None:
@@ -172,6 +187,8 @@ class VoiceLoop:
             try:
                 if isinstance(item, SessionStart):
                     self._session_turn(item)
+                elif isinstance(item, TextTurn):
+                    self._text_turn(item)
                 elif isinstance(item, Intervention):
                     self._intervention_turn(item)
                 else:
@@ -209,6 +226,12 @@ class VoiceLoop:
         self._reply(self._tutor.respond(text, cancel), cancel, marks)
         self._log_latency(utt, source, marks, cancel.is_set())
 
+    def _text_turn(self, item: TextTurn) -> None:
+        cancel = self._begin_turn()
+        log.info("student (typed): %r", item.text)
+        self._emit("user", item.text)
+        self._reply(self._tutor.respond(item.text, cancel), cancel, {})
+
     def _session_turn(self, item: SessionStart) -> None:
         self._tutor.start_session(item.session)
         cancel = self._begin_turn()
@@ -216,13 +239,13 @@ class VoiceLoop:
         self._reply(self._tutor.respond(item.greeting, cancel, hidden=True), cancel, {})
 
     def _intervention_turn(self, item: Intervention) -> None:
-        if self._state.user_speaking:
+        if self._state.user_speaking and item.kind == "nudge":
             log.info("dropping focus intervention: the student started speaking")
             return
         cancel = self._begin_turn()
-        log.info("speaking focus intervention: %s", item.message)
+        log.info("speaking %s: %s", "focus intervention" if item.kind == "nudge" else "user action", item.message)
         if item.label:
-            self._emit("intervention", item.label)
+            self._emit("intervention" if item.kind == "nudge" else "action", item.label)
         self._reply(self._tutor.respond(item.message, cancel, hidden=True), cancel, {})
         play = self._speaker.first_play_t
         if play is not None:
@@ -246,7 +269,7 @@ class VoiceLoop:
 
         def send(chunk: str) -> None:
             nonlocal sent
-            chunk = prompts.strip_markers(chunk)
+            chunk = prompts.strip_markers(chunk).replace("**", "")   # the model sometimes bolds words anyway
             if not chunk:
                 return
             sent = True

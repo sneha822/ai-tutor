@@ -5,7 +5,8 @@ as (happy) before the text they belong to.
     .venv/bin/python scripts/text_chat.py --mode tutor --name Sam --subject Calculus
     .venv/bin/python scripts/text_chat.py --mode friend --name Sam
 
-Commands: /see <words> (pretend the camera sees e.g. "smiling, looking at you")   /nocam   /reindex   /quit
+Commands: /add <file> (add a PDF or image to your notes)   /notes   /see <words> (pretend the camera sees e.g.
+"smiling, looking at you")   /nocam   /reindex   /quit
 """
 import argparse
 import logging
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tutor import prompts  # noqa: E402
 from tutor.emotions import EmotionTagParser  # noqa: E402
+from tutor.notes import NoteError, NotesLibrary, NotesTools  # noqa: E402
 from tutor.session import MODES, Session  # noqa: E402
 from tutor.tutor import Tutor  # noqa: E402
 
@@ -35,6 +37,7 @@ def main():
 
     camera = {"camera_on": False, "observation": None}
     tutor = Tutor(context=lambda: camera)
+    tutor.notes = NotesTools(NotesLibrary(tutor.retriever))
     session = Session.from_request({"mode": args.mode, "name": args.name, "subject": args.subject})
     tutor.start_session(session)
 
@@ -66,6 +69,17 @@ def main():
         if text == "/reindex":
             if tutor.retriever:
                 tutor.retriever.sync()
+            continue
+        if text.startswith("/add "):
+            path = Path(text[5:].strip()).expanduser()
+            try:
+                note = tutor.notes.library.add(path.name, path.read_bytes())
+                print(f"(added note {note.id}; it's being read in the background, see /notes)")
+            except (OSError, NoteError) as e:
+                print(f"(couldn't add it: {e})")
+            continue
+        if text == "/notes":
+            print(tutor.notes.library.shelf() or "(no notes yet)")
             continue
         if text.startswith("/see "):
             camera.update(camera_on=True, observation=text[5:].strip())

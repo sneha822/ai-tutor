@@ -71,6 +71,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
       </button>
       <span class="ctl-sep" aria-hidden="true"></span>
+      <button type="button" id="notes-btn" class="ctl" data-tip="Your notes: add PDFs or photos" aria-label="Your notes" aria-controls="notes" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/></svg>
+        <span id="notes-count" class="ctl-badge" hidden>0</span>
+      </button>
       <button type="button" id="privacy-btn" class="ctl" data-tip="What's shared with the AI" aria-label="Privacy and data" aria-controls="privacy" aria-expanded="false">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 4.5 5.5v6c0 4.7 3.2 8.6 7.5 10 4.3-1.4 7.5-5.3 7.5-10v-6z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>
       </button>
@@ -131,6 +135,12 @@
         <p>Ask about anything you're studying. I'm listening.</p>
       </div>
     </div>
+    <form id="composer" class="composer" autocomplete="off">
+      <input id="composer-input" type="text" maxlength="2000" placeholder="Type a message or paste a link…" aria-label="Type a message" disabled>
+      <button type="submit" id="composer-send" class="composer-send" aria-label="Send" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+      </button>
+    </form>
   </aside>
 
   <div id="toast" class="toast" role="status" hidden></div>
@@ -162,6 +172,8 @@
         <ul>
           <li><strong>Short clips of your voice</strong><span>Only after you finish speaking, to turn them into text (<span data-p="stt_model">Whisper</span>). If the connection drops, transcription happens on this computer instead.</span></li>
           <li><strong>The conversation as text</strong><span>Your transcribed words, the tutor's recent replies (last <span data-p="history_turns">10</span> exchanges) and matching passages from your course notes, so the tutor can answer.</span></li>
+          <li><strong>Notes you add</strong><span>Once, when you add them: photos and scanned pages go to an image model (<span data-p="notes_vision">Qwen</span>) to be read, and the text goes to a small model for a title and summary. After that, the AI reads the parts it needs while teaching you.</span></li>
+          <li><strong>Web pages the AI opens</strong><span>Only links in your notes, links you give it, and links on pages it already opened; public sites only, never your computer or home network. The page text goes to the AI so it can use it.</span></li>
           <li><strong>Your name and what you picked</strong><span>The name you typed and the subject or talk mode from the welcome screen, so the AI can greet you and stay in role.</span></li>
           <li><strong>What the camera notices, as words</strong><span>While your camera is on, a few words like "smiling, looking at you" go along with what you say, so the AI can react to you. Never images or video.</span></li>
           <li><strong>Focus nudges, as words</strong><span>Tutor mode only: when a nudge fires, a short note like "looking down for 12s, 2nd time in 10 min" and the current topic.</span></li>
@@ -177,7 +189,7 @@
           <li><strong>Your camera video</strong><span>Analyzed in memory for head angle, eyes, expressions and presence, then discarded. Never saved or uploaded. Your self-view stays on this computer too: the browser shows it directly, or on Windows the app sends small preview frames to this page over localhost.</span></li>
           <li><strong>Focus score and face measurements</strong><span>Computed locally. Only the nudge note above ever leaves.</span></li>
           <li><strong>The tutor's voice</strong><span>Generated on this computer (<span data-p="tts">Kokoro</span>), along with speech detection and the offline transcription fallback.</span></li>
-          <li><strong>Your course materials</strong><span>The files in ./materials and their search index.</span></li>
+          <li><strong>Your course materials and notes</strong><span>The files in ./materials and ./notes, what was read from them, and their search index. Delete a note anytime from the Notes section.</span></li>
           <li><strong>Session logs</strong><span>Transcripts and focus scores in ./logs, kept on this computer only.</span></li>
         </ul>
       </section>
@@ -185,6 +197,56 @@
       <p class="drawer-foot">Turn the camera or microphone off anytime from the bar at the bottom, or with ⌃⌥V and ⌃⌥M. Off means off: the device is released.</p>
     </div>
   </aside>
+
+  <aside id="notes" class="drawer drawer-left" aria-label="Your notes" aria-hidden="true">
+    <div class="drawer-head">
+      <div>
+        <p class="drawer-kicker">Notes</p>
+        <h2>Your study notes</h2>
+      </div>
+      <button type="button" id="notes-close" class="icon-btn" title="Close (Esc)" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <div class="drawer-body">
+      <label class="note-drop">
+        <input id="note-file" type="file" accept="application/pdf,image/*" multiple class="visually-hidden">
+        <span class="note-drop-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></span>
+        <strong>Drop PDFs or photos of your notes</strong>
+        <span>or click to choose. The AI reads them once, then just say “check my notes and explain them”.</span>
+      </label>
+      <div id="note-list" class="note-list"></div>
+      <p id="note-empty" class="note-empty">No notes yet. Lecture slides, handwritten pages and screenshots all work.</p>
+    </div>
+  </aside>
+
+  <div id="drop-overlay" class="drop-overlay" hidden>
+    <div class="drop-card">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M12 11v6M9 14l3 3 3-3"/></svg>
+      <strong>Drop to add to your notes</strong>
+      <span>PDFs and images · the AI reads them once</span>
+    </div>
+  </div>
+
+  <div id="note-holo" class="note-holo" hidden>
+    <div class="holo-card">
+      <button type="button" id="holo-close" class="holo-close" aria-label="Hide note card">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+      <div class="holo-page">
+        <img id="holo-img" alt="">
+        <div class="holo-site" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></svg>
+          <span id="holo-site-name"></span>
+        </div>
+        <span class="holo-scan"></span><span id="holo-page" class="holo-pagenum"></span>
+      </div>
+      <p id="holo-state" class="holo-state">Reading your notes</p>
+      <strong id="holo-title" class="holo-title"></strong>
+      <span id="holo-section" class="holo-section"></span>
+      <div class="holo-progress"><span id="holo-bar"></span></div>
+    </div>
+  </div>
 
   <div id="welcome" class="welcome" hidden>
     <form id="welcome-form" class="welcome-card" role="dialog" aria-modal="true" aria-labelledby="welcome-title" novalidate>

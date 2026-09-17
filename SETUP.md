@@ -213,8 +213,20 @@ Just talk. Try *"Teach me derivatives"*, or in friend mode *"Guess what happened
 
 ### Teaching from your own notes
 
-Put `.md`, `.txt` or `.pdf` files in the `materials` folder and restart the tutor. It will teach from them. A sample
-calculus file is included; delete it if you don't need it.
+The easy way: click **Notes** (the page icon in the bottom bar) and drop in PDFs or photos of your notes. Or just drag
+them anywhere onto the page. Each note shows a scanning animation while the AI reads it, then gets a title, topics
+and a summary. After that, just say *"I just uploaded my notes on photosynthesis, check my notes and explain them"*,
+or press **Explain this** on the card. The AI opens the note and teaches it part by part, and a small glowing page
+next to it shows where it is.
+
+Click a note's title to see its sections (start explaining from any of them), its links (click to open) and
+questions you can ask with one click. If your notes contain links, like the GitHub on a resume, you can say *"check
+my resume and open my GitHub, which project stands out?"* and the AI will open them itself. Above every answer you
+can see what it was thinking and each step it took (click **Thought for…** to open it). You can also type in the box
+under the conversation instead of talking, for example to paste a link.
+
+You can also put `.md`, `.txt` or `.pdf` files in the `materials` folder and restart the tutor; it uses those
+automatically. A sample calculus file is included; delete it if you don't need it.
 
 ### Starting it again another day
 

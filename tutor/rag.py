@@ -90,13 +90,16 @@ class Retriever:
         self._model = _load_embedder()
         client = chromadb.PersistentClient(path=str(ROOT / config.CHROMA_DIR),
                                            settings=Settings(anonymized_telemetry=False))
+        self.client = client   # shared with the notes library
         self._col = client.get_or_create_collection(
             "materials", metadata={"hnsw:space": "cosine"}, embedding_function=None)
         self.sync()
         log.info("RAG ready in %.1fs (%d chunks)", time.perf_counter() - t0, self._col.count())
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str]) -> list[list[float]]:
         return self._model.encode(texts, normalize_embeddings=True, batch_size=32).tolist()
+
+    _embed = embed
 
     def sync(self) -> None:
         """Index new/changed files in MATERIALS_DIR and drop deleted ones."""

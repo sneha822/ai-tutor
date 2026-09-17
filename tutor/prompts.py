@@ -140,6 +140,28 @@ You: [excited] Oh, this one's fun. Sunlight bounces off the air, and blue light 
 your eyes from every direction.""",
 }
 
+NOTES = """\
+The user's notes section (files they uploaded, newest first):
+{shelf}
+- When they mention notes they uploaded, say "my notes", or want something from their notes explained, use your \
+notes tools: open_note to see a note's sections, read_note_section to read one, search_notes to find a topic \
+across notes. "The notes I just uploaded" means the newest note that fits. Never pretend you've read a note you \
+haven't opened.
+- To explain a note, teach it one section at a time in your usual style, starting with section 1, and say which \
+part you're on. Stay faithful to their notes, add a short example, and fill gaps from your own knowledge when the \
+notes are thin. Offer to continue with the next section.
+- If a note is still being read, say so and offer to start as soon as it's ready.
+
+Web links:
+- list_note_links shows the links in a note (like the GitHub, portfolio or project links on a resume), and \
+open_link reads a public page. You may open links from their notes, links they give you (said or typed), and \
+links found on pages you already opened. Never guess an address.
+- Work like an agent: plan the steps you need, then take them one after another without asking permission for \
+each, for example open the resume, list its links, open the GitHub profile, then open a project repository. \
+Afterwards say briefly what you looked at and what you found, then answer.
+- If a site blocks you or needs a login (LinkedIn often does), say so plainly and work with what you have.
+{focus}"""
+
 MATERIALS = """\
 Course materials:
 - When the excerpts below are relevant, ground your explanation in them and use their notation and examples.
@@ -215,7 +237,21 @@ def greeting_message(session: Session) -> str:
     return f"[SYSTEM: a new session just started. {task}]"
 
 
-def system_prompt(session: Session | None, chunks: list[Chunk] | None = None, camera_on: bool = False) -> str:
+def notes_section(shelf: str, focus: str) -> str:
+    return NOTES.replace("{shelf}", shelf or "(empty)").replace("{focus}", focus).rstrip()
+
+
+def explain_note_message(note_id: str, title: str, section: int | None = None) -> str:
+    """Hidden message sent when the user taps Explain on a note card, or on one of its sections."""
+    start = f"section {section}" if section else "section 1"
+    how = (f"open it and read section {section} with your notes tools" if section and section > 1
+           else "open it with your notes tools")
+    return (f"[SYSTEM: the user tapped Explain on their note {note_id}, titled {title}. Please {how} and start "
+            f"teaching it from {start}. Begin by saying which note you're explaining.]")
+
+
+def system_prompt(session: Session | None, chunks: list[Chunk] | None = None, camera_on: bool = False,
+                  notes: str = "") -> str:
     # str.replace, not str.format: the prompt and the materials are full of LaTeX braces.
     session = session or Session()
     name = session.name or ("the student" if session.tutoring else "the user")
@@ -226,6 +262,8 @@ def system_prompt(session: Session | None, chunks: list[Chunk] | None = None, ca
              SYSTEM_NOTES + ("\n" + FOCUS_NOTES if session.tutoring else ""),
              (CAMERA_ON if camera_on else CAMERA_OFF).replace("{name}", name),
              EXAMPLES[session.mode]]
+    if notes:
+        parts.append(notes)
     if session.tutoring:
         if chunks:
             body = "\n\n".join(f"[{c.source} | {c.section}]\n{c.text}" for c in chunks)

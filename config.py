@@ -57,6 +57,9 @@ OTHER_PERSON_MIN_S = 3.0      # ...once it has stayed this long
 LLM_MODEL = "openai/gpt-oss-120b"   # llama-3.3-70b-versatile was retired from Groq; measured ~0.55s to first sentence
 LLM_FALLBACK_MODEL = "openai/gpt-oss-20b"  # used for a turn when LLM_MODEL is rate limited (free tier: 8k tokens/min per model). "" to disable
 LLM_REASONING_EFFORT = "low"        # gpt-oss only; higher = slower first token
+LLM_REASONING_EFFORT_AGENT = "medium"   # used when notes or links are involved, and after the first tool call
+LLM_MAX_TOKENS_AGENT = 1600         # token budget for those deeper-thinking requests (reasoning included)
+LLM_MAX_TOOL_ROUNDS = 6             # tool rounds per reply (open a note, list its links, open a page, ...)
 LLM_TEMPERATURE = 0.6
 LLM_MAX_TOKENS = 600                # includes hidden reasoning tokens
 LLM_TIMEOUT_S = 10.0
@@ -73,6 +76,17 @@ CHUNK_CHARS = 800
 CHUNK_OVERLAP = 150
 RAG_TOP_K = 4
 RAG_MAX_DISTANCE = 0.75             # cosine distance; chunks less similar than this are not injected
+
+# =====================================================================
+# YOUR NOTES (uploaded in the page's Notes section; the AI opens them with tools)
+# =====================================================================
+NOTES_DIR = "notes"                 # uploaded files and what was read from them (local, not in git)
+NOTES_VISION_MODEL = "qwen/qwen3.8-27b"      # reads photos and scanned pages (sent to Groq once, at upload)
+NOTES_SUMMARY_MODEL = "openai/gpt-oss-20b"   # writes each note's title, topics and summary (own rate limit)
+NOTES_MAX_MB = 25                   # largest file accepted
+NOTES_MAX_PAGES = 40                # pages read from a PDF
+NOTES_ON_SHELF = 12                 # newest notes the AI is told about each turn
+NOTES_FOCUS_CHARS = 2500            # text of the note section being taught, kept in the AI's prompt
 
 # =====================================================================
 # VOICE (stage 3)

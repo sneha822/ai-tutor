@@ -11,8 +11,11 @@ env/
 # Downloaded by scripts/download_models.py
 models/
 
-# Search index of ./materials, rebuilt automatically when the tutor starts
+# Search index of ./materials and your notes, rebuilt automatically when the tutor starts
 .chroma/
+
+# Notes you upload in the page (your own files, and what the AI read from them)
+notes/
 
 # Session logs and check reports (they contain what you said to the tutor)
 logs/

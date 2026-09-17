@@ -3,6 +3,7 @@
 // avatar and the self-view load as separate modules; if either fails, the rest still works.
 
 import { EMOTIONS, emotionMeta } from "./emotions.js";
+import { createNotes } from "./notes.js";
 
 const $ = (id) => document.getElementById(id);
 const convo = $("conversation");
@@ -49,6 +50,17 @@ let emotion = "neutral";     // the AI's emotion shown on the face and mood chip
 let replyEmotion = "neutral"; // emotion of the reply being streamed, for its label
 let platform = "";           // the app's OS; on Windows the self-view uses the app's camera frames
 
+const notes = createNotes({
+  send: sendMessage,
+  ask: askText,
+  toast: (text, kind) => showToast(text, kind),
+  hasSession: () => Boolean(session),
+  onDrawer: (open) => {
+    if (open) setDrawer(false);
+    updateScrim();
+  },
+});
+
 import("./avatar.js")
   .then(({ createAvatar }) => {
     avatar = createAvatar($("stage"));
@@ -78,6 +90,131 @@ function sendMessage(message) {
 
 function sendAction(action) {
   return sendMessage({ action });
+}
+
+function askText(text) {
+  return sendMessage({ action: "ask_text", text });
+}
+
+// ------------------------------------------------------------------ typed messages
+
+const composer = $("composer");
+const composerInput = $("composer-input");
+const composerSend = $("composer-send");
+
+function updateComposer() {
+  const ready = connected() && Boolean(session);
+  composerInput.disabled = !ready;
+  composerInput.placeholder = ready ? "Type a message or paste a link…"
+    : session ? "Connecting…" : "Start a session to chat";
+  composerSend.disabled = !ready || !composerInput.value.trim();
+}
+
+composerInput.addEventListener("input", updateComposer);
+composer.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = composerInput.value.trim();
+  if (!text || !askText(text)) return;
+  composerInput.value = "";
+  updateComposer();
+});
+
+// ------------------------------------------------------------------ the AI's thinking (reasoning + steps)
+
+const STEP_ICONS = {
+  open_note: '<svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/></svg>',
+  read_note_section: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
+  search_notes: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>',
+  list_note_links: '<svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>',
+  open_link: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></svg>',
+};
+const seconds = (ms) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
+let thinking = null;   // the thinking block of the reply in progress
+
+function thinkBlock(live) {
+  const el = document.createElement("div");
+  el.className = live ? "think live open" : "think";
+  el.innerHTML = `<button type="button" class="think-head" aria-expanded="${live}"><span class="think-orb"></span>`
+    + `<span class="think-label">${live ? "Thinking" : "Thought"}</span><span class="think-meta"></span>`
+    + '<svg class="think-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>'
+    + '<div class="think-body"><p class="think-note">Rough working, as it thinks. It can contain mistakes.</p>'
+    + '<p class="think-text"></p><ol class="think-steps"></ol></div>';
+  const head = el.querySelector(".think-head");
+  const text = el.querySelector(".think-text");
+  const list = el.querySelector(".think-steps");
+  const meta = el.querySelector(".think-meta");
+  const label = el.querySelector(".think-label");
+  const steps = new Map();
+  let userToggled = false;
+  let thoughtMs = null;
+
+  const setOpen = (open) => {
+    el.classList.toggle("open", open);
+    head.setAttribute("aria-expanded", String(open));
+  };
+  head.addEventListener("click", () => {
+    userToggled = true;
+    setOpen(!el.classList.contains("open"));
+  });
+  const summary = () => {
+    const n = steps.size;
+    return n ? `· ${n} step${n === 1 ? "" : "s"}` : "";
+  };
+
+  return {
+    el,
+    reason(chunk) {
+      const stick = text.scrollHeight - text.scrollTop - text.clientHeight < 30;
+      text.textContent += chunk;
+      if (stick) text.scrollTop = text.scrollHeight;
+    },
+    step(ev) {
+      let li = steps.get(ev.id);
+      if (!li) {
+        li = document.createElement("li");
+        li.className = "think-step";
+        li.innerHTML = `<span class="step-icon" aria-hidden="true">${STEP_ICONS[ev.tool] || STEP_ICONS.read_note_section}</span>`
+          + '<span class="step-label"></span><span class="step-time"></span>';
+        list.appendChild(li);
+        steps.set(ev.id, li);
+      }
+      li.dataset.status = ev.status;
+      li.querySelector(".step-label").textContent = ev.label;
+      li.querySelector(".step-time").textContent = ev.ms != null ? seconds(ev.ms) : "";
+      meta.textContent = el.classList.contains("live") ? `· ${ev.label}` : summary();
+    },
+    answered(ms) {
+      thoughtMs = ms;
+      label.textContent = `Thought for ${seconds(ms)}`;
+      meta.textContent = summary();
+      if (!userToggled) setOpen(false);   // fold away once the reply starts
+    },
+    finish(ev) {
+      if (!text.textContent && ev.reasoning) text.textContent = ev.reasoning;
+      el.classList.remove("live");
+      label.textContent = ev.failed ? "Couldn't finish thinking" : `Thought for ${seconds(thoughtMs ?? ev.ms ?? 0)}`;
+      meta.textContent = summary();
+      if (!text.textContent.trim() && !steps.size) el.classList.add("empty");
+      if (!userToggled) setOpen(false);
+    },
+  };
+}
+
+function onThink(ev, live) {
+  if (ev.kind === "start" || (!thinking && ev.kind !== "end")) {
+    if (thinking) thinking.finish({});
+    thinking = thinkBlock(live);
+    append(thinking.el);
+    if (ev.kind === "start") return;
+  }
+  if (!thinking) return;
+  if (ev.kind === "reasoning") thinking.reason(ev.text);
+  else if (ev.kind === "step") thinking.step(ev);
+  else if (ev.kind === "answer") thinking.answered(ev.ms);
+  else if (ev.kind === "end") {
+    thinking.finish(ev);
+    thinking = null;
+  }
 }
 
 // ------------------------------------------------------------------ emotion
@@ -212,6 +349,17 @@ function onEvent(ev, live) {
       }
       break;
     }
+    case "think":
+      onThink(ev, live);
+      break;
+    case "action": {
+      endTutor();
+      const chip = document.createElement("div");
+      chip.className = "nudge action";
+      chip.textContent = ev.label;
+      append(chip);
+      break;
+    }
     case "session": {
       endTutor();
       const divider = document.createElement("div");
@@ -239,6 +387,8 @@ function setSession(next) {
     $("session-text").textContent = [session.name, what].filter(Boolean).join(" · ");
   }
   updateWelcome();
+  updateComposer();
+  notes.refresh();   // "Explain this" needs a session
 }
 
 function loadWelcomePrefs() {
@@ -304,7 +454,7 @@ function openWelcome() {
   $("w-camera").checked = lastStatus ? lastStatus.camera_enabled !== false : prefs.camera !== false;
   delete $("w-start").dataset.pending;
   welcome.hidden = false;
-  for (const el of document.querySelectorAll(".topbar, .stage-ui, .panel, #selfview, #audio-menu")) el.inert = true;
+  for (const el of document.querySelectorAll(".topbar, .stage-ui, .panel, #selfview, #audio-menu, #notes, #note-holo")) el.inert = true;
   setAudioMenu(false);
   updateWelcome();
   ($("w-name").value ? select : $("w-name")).focus();
@@ -314,7 +464,7 @@ function closeWelcome() {
   if (welcome.hidden) return;
   welcome.hidden = true;
   delete $("w-start").dataset.pending;
-  for (const el of document.querySelectorAll(".topbar, .stage-ui, .panel, #selfview, #audio-menu")) el.inert = false;
+  for (const el of document.querySelectorAll(".topbar, .stage-ui, .panel, #selfview, #audio-menu, #notes, #note-holo")) el.inert = false;
 }
 
 for (const id of ["w-name", "w-choice", "w-other", "w-camera"]) {
@@ -417,6 +567,7 @@ function applyStatus(s) {
   }
   applyEmotion(s.emotion || "neutral");
   applyFocus(s, cameraOn);
+  notes.setFocus(s.note_focus || null);
 
   const mode = s.user_speaking ? "user" : s.tutor_speaking ? "speaking" : s.thinking ? "thinking" : micOn ? "listening" : "muted";
   $("mode").dataset.mode = mode;
@@ -567,17 +718,26 @@ function setDrawer(open) {
   drawer.classList.toggle("open", open);
   drawer.setAttribute("aria-hidden", String(!open));
   privacyBtn.setAttribute("aria-expanded", String(open));
-  scrim.hidden = !open;
+  if (open && notes.isOpen()) notes.close();
+  updateScrim();
   if (open) $("privacy-close").focus();
   else if (wasOpen) (welcome.hidden ? privacyBtn : $("w-privacy")).focus();
 }
 
+function updateScrim() {
+  scrim.hidden = !(drawer.classList.contains("open") || notes.isOpen());
+}
+
 privacyBtn.addEventListener("click", () => setDrawer(!drawer.classList.contains("open")));
 $("privacy-close").addEventListener("click", () => setDrawer(false));
-scrim.addEventListener("click", () => setDrawer(false));
+scrim.addEventListener("click", () => {
+  setDrawer(false);
+  notes.close();
+});
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (drawer.classList.contains("open")) setDrawer(false);
+  else if (notes.isOpen()) notes.close();
   else if (!audioMenu.hidden) setAudioMenu(false);
   else if (!welcome.hidden && session) closeWelcome(); // switching is optional; the first start isn't
 });
@@ -592,6 +752,7 @@ function setConnected(live) {
   audioMenuBtn.disabled = !live;
   if (!live) setAudioMenu(false);
   updateWelcome();
+  updateComposer();
 }
 
 function connect() {
@@ -617,15 +778,25 @@ function connect() {
       renderDevices();
     } else if (data.type === "notice") {
       showToast(data.text, "info");
+    } else if (data.type === "notes") {
+      notes.setNotes(data.notes || []);
+    } else if (data.type === "note_focus") {
+      notes.setFocus(data.focus, data.reading);
     } else if (data.type === "hello") {
       platform = data.platform || "";
       selfView?.useAppPreview(platform === "win32");   // before the status below switches the camera on
-      convo.querySelectorAll(".msg, .nudge, .divider").forEach((n) => n.remove());
+      convo.querySelectorAll(".msg, .nudge, .divider, .think").forEach((n) => n.remove());
       empty.hidden = false;
       tutorBubble = null;
+      thinking = null;
       data.events.forEach((ev) => onEvent(ev, false));
       endTutor();
+      if (thinking) {   // a reply was still being thought about when the page loaded
+        thinking.finish({});
+        thinking = null;
+      }
       if (data.privacy) fillPrivacy(data.privacy);
+      notes.setNotes(data.notes || []);
       if (data.devices) devices = data.devices;
       setSession(data.session);
       applyStatus(data.status);

@@ -37,9 +37,13 @@ def print_event(kind: str, text: str) -> None:
         print(f" tutor> {text}", flush=True)
     elif kind == "emotion":
         print(f"   ({text})", flush=True)
+    elif kind == "think":
+        step = json.loads(text)
+        if step.get("kind") == "step" and step.get("status") != "running":
+            print(f"   · {step['label']}{'' if step['status'] == 'done' else ' (failed)'}", flush=True)
     elif kind == "interrupted":
         print(f"   [interrupted: {text}]", flush=True)
-    elif kind == "intervention":
+    elif kind in ("intervention", "action"):
         print(f"\n   [{text}]", flush=True)
     elif kind == "session":
         info = json.loads(text)
@@ -89,6 +93,13 @@ def main() -> None:
         return {"camera_on": on, "observation": snap.observation if on else None}
 
     tutor = Tutor(context=camera_context)
+    try:
+        from tutor.notes import NotesLibrary, NotesTools
+        library = NotesLibrary(tutor.retriever, on_change=lambda: ui is not None and ui.notify_notes())
+        tutor.notes = NotesTools(library, on_focus=lambda focus, reading: ui is not None and ui.note_event(focus, reading))
+    except Exception:
+        log.exception("NOTES UNAVAILABLE; continuing without the Notes section")
+    tutor.on_think = lambda kind, data: on_event("think", json.dumps({"kind": kind, **data}))
     stt = Transcriber()
     tts = TTS()
     input_device, output_device = load_saved()   # last choice from the page's device menu, else config.py
@@ -130,6 +141,26 @@ def main() -> None:
         log.info("SESSION: %s (camera %s)", session.label(), "on" if state.camera_enabled else "off")
         on_event("session", json.dumps(session.to_dict()))
 
+    def explain_note(msg: dict) -> None:
+        """The Explain button on a note card: the AI opens that note and starts teaching it."""
+        note = tutor.notes.library.get(str(msg.get("note_id") or "")) if tutor.notes is not None else None
+        section = msg.get("section")
+        section = section if isinstance(section, int) and note and 1 <= section <= len(note.sections) else None
+        if note is None or note.status != "ready":
+            log.warning("Explain ignored: note %r isn't ready", msg.get("note_id"))
+        elif state.session is None:
+            log.warning("Explain ignored: no session yet")
+        else:
+            where = f" · from “{note.sections[section - 1]['title']}”" if section and section > 1 else ""
+            loop.intervene(prompts.explain_note_message(note.id, note.title, section), force=True,
+                           label=f"Explain · {note.title}{where}", kind="action")
+
+    def ask_text(msg: dict) -> None:
+        """A message typed in the page, or a suggested question clicked."""
+        text = str(msg.get("text") or "").strip()[:2000]
+        if text:
+            loop.ask(text)
+
     actions = {
         "i": lambda: loop.interrupt("terminal"),
         "f": interventions.force,
@@ -147,7 +178,9 @@ def main() -> None:
         config.HOTKEY_TOGGLE_MIC: toggle_mic,
         config.HOTKEY_TOGGLE_CAMERA: toggle_camera,
     })
-    ui = UIServer(state, detector, devices=devices, param_actions={"start_session": start_session}, actions={
+    ui = UIServer(state, detector, devices=devices, notes=tutor.notes,
+                  param_actions={"start_session": start_session, "explain_note": explain_note, "ask_text": ask_text},
+                  actions={
         "interrupt": lambda: loop.interrupt("button"),
         "force": interventions.force,
         "toggle_suppress": interventions.toggle_suppress,

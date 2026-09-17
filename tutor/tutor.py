@@ -5,6 +5,7 @@ streaming LLM.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -17,11 +18,18 @@ from tutor.session import Session
 log = logging.getLogger("tutor")
 
 DEFAULT_TOPIC = "what we were just discussing"
+# Messages that probably need several steps (notes, documents, links): these get deeper reasoning.
+AGENT_HINT = re.compile(r"\b(notes?|resume|cv|links?|urls?|websites?|site|github|gitlab|portfolio|linkedin|pdf|"
+                        r"upload\w*|sections?|pages?|documents?|files?|repos?|repositor\w+|projects?)\b|https?://|www\.",
+                        re.I)
 
 
 class Tutor:
-    def __init__(self, context: Callable[[], dict] | None = None):
-        """context(), if given, returns {"camera_on": bool, "observation": str | None} for the current moment."""
+    def __init__(self, context: Callable[[], dict] | None = None, notes=None):
+        """context(), if given, returns {"camera_on": bool, "observation": str | None} for the current moment.
+        notes, if given, is a tutor.notes.NotesTools: the AI then sees the notes shelf and can open notes and links."""
+        self.notes = notes
+        self.on_think: Callable[[str, dict], None] | None = None   # thinking events for the page
         self.llm = LLMClient()
         self.retriever = None
         try:
@@ -43,6 +51,8 @@ class Tutor:
         self.history = []
         self._interrupted = False
         self.current_topic = session.subject or DEFAULT_TOPIC
+        if self.notes is not None:
+            self.notes.clear()
         log.info("session started: %s", session.label())
 
     def mark_last_reply_interrupted(self) -> None:
@@ -58,6 +68,41 @@ class Tutor:
         except Exception:
             log.exception("camera context failed (continuing without it)")
             return False, None
+
+    def _thinker(self) -> Callable[[str, dict], None]:
+        """Forwards one reply's thinking events to on_think, merging reasoning tokens into small chunks."""
+        sink = self.on_think
+        buf: list[str] = []
+        everything: list[str] = []
+        t0 = last = time.monotonic()
+
+        def flush() -> None:
+            nonlocal last
+            if buf:
+                sink("reasoning", {"text": "".join(buf)})
+                everything.extend(buf)
+                buf.clear()
+            last = time.monotonic()
+
+        def think(kind: str, data: dict) -> None:
+            if sink is None:
+                return
+            try:
+                if kind == "reasoning":
+                    buf.append(data.get("text", ""))
+                    if sum(map(len, buf)) >= 48 or time.monotonic() - last > 0.12:
+                        flush()
+                    return
+                flush()
+                if kind in ("answer", "end"):
+                    data = {**data, "ms": round((time.monotonic() - t0) * 1000)}
+                if kind == "end":   # the whole reasoning once more, so a reloaded page can show it
+                    data["reasoning"] = "".join(everything)[-4000:]
+                sink(kind, data)
+            except Exception:
+                log.exception("thinking event failed (continuing)")
+
+        return think
 
     def respond(self, user_text: str, cancel: threading.Event | None = None, hidden: bool = False) -> Iterator[str]:
         """Stream the reply, starting with an emotion tag like [happy].
@@ -77,6 +122,8 @@ class Tutor:
             content = f"{prompts.INTERRUPTED_NOTE} {user_text}"
         if not hidden and camera_on:
             content = prompts.with_camera_note(content, observation)
+        think = self._thinker()
+        effort = config.LLM_REASONING_EFFORT
         try:
             if not hidden and session.tutoring:
                 # Include the previous question so follow-ups like "show me an example of that" still retrieve.
@@ -88,17 +135,32 @@ class Tutor:
                 if chunks and chunks[0].section:
                     # Only a matched course section becomes the topic; small talk ("I'm watching the screen") must not.
                     self.current_topic = chunks[0].section[:80].rstrip(" .?!,;:")
-            messages = [{"role": "system", "content": prompts.system_prompt(session, chunks, camera_on)}]
+            if self.notes is not None and not hidden:
+                self.notes.remember_user_text(user_text)
+            notes = self.notes if self.notes is not None and self.notes.available else None
+            notes_prompt = ""
+            tools = None
+            if notes is not None:
+                from tutor.notes import TOOLS as tools
+                notes.begin_turn()
+                notes_prompt = prompts.notes_section(notes.library.shelf(), notes.prompt())
+                if AGENT_HINT.search(user_text):
+                    effort = config.LLM_REASONING_EFFORT_AGENT
+            messages = [{"role": "system", "content": prompts.system_prompt(session, chunks, camera_on, notes_prompt)}]
             messages += self.history[-2 * config.HISTORY_TURNS:]
             messages.append({"role": "user", "content": content})
-            for delta in self.llm.stream(messages, cancel):
+            think("start", {"effort": effort})
+            for delta in self.llm.stream(messages, cancel, tools=tools, runner=notes, effort=effort, on_think=think):
                 reply.append(delta)
                 yield delta
+            think("end", {"effort": effort})
         except LLMError:
+            think("end", {"effort": effort, "failed": True})
             yield prompts.LLM_FAILURE_REPLY
             return
         except Exception:
             log.exception("TURN FAILED (continuing)")
+            think("end", {"effort": effort, "failed": True})
             yield prompts.LLM_FAILURE_REPLY
             return
 

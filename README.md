@@ -139,6 +139,40 @@ you. They come from MediaPipe face landmarks and blendshapes, compared with your
 and the frame is dropped. With the camera on the AI is a little warmer and more attentive; with it off, calmer and
 more neutral.
 
+## Your notes (PDFs and photos)
+
+Open **Notes** in the bottom bar, or drop files anywhere on the page. PDFs, photos of handwritten pages and
+screenshots all work.
+
+- **Reading, once:** pages with real PDF text are used as they are; photos and scanned pages are read by the Groq
+  image model (`NOTES_VISION_MODEL`). The text is split into numbered sections (headings, else pages), indexed
+  locally, and a small model (`NOTES_SUMMARY_MODEL`) writes a title, subject, topics, summary and suggested questions.
+  Cards show a scanning animation while this happens.
+- **The AI opens them itself.** It always knows your notes shelf (titles, subjects, when you added them) and has
+  tools to open a note, read a section and search all notes. Say *"I just uploaded my AI engineering notes, check my
+  notes section and explain them"*: it says "let me look at your notes", finds the newest match and teaches it
+  section by section. **Explain this** on a card does the same without speaking.
+- **While it teaches**, a holographic card beside the avatar shows the page, the section and progress, and the
+  note's card glows. The section in use stays in the AI's prompt, so follow-up questions need no new lookup.
+- **Cards expand** into the note's sections (each with *Explain from here*), its web links (click to open them)
+  and suggested questions (click to ask).
+- Files and everything read from them stay in `./notes` (not in git). Delete a note from its card.
+
+## Agent mode: thinking, steps and links
+
+- **It works in steps.** With notes or links involved, the AI reasons more deeply (`LLM_REASONING_EFFORT_AGENT`) and
+  can chain up to `LLM_MAX_TOOL_ROUNDS` tool calls: open a note, list its links, open a page, open a repository
+  found there, then answer. A short spoken line ("One sec, looking at github.com") fills the wait.
+- **Links it may open:** links found in your notes (clickable PDF links and written addresses, e.g. the GitHub on a
+  resume), links you type or say, and links on pages it already opened. Public http(s) sites only: this computer,
+  the local network and unusual ports are refused (`tutor/web.py`). GitHub profiles and repositories are read
+  through GitHub's public API and README. Sites that block automated reading (LinkedIn) are reported as such.
+- **You see its thinking.** Above each reply, a *Thinking* block streams the model's reasoning (rough working, it
+  can contain mistakes) and a timeline of every step with timings; it folds into "Thought for 2.4s · 3 steps" when
+  the reply starts, and a click reopens it. The holographic card switches to the website being read.
+- **Type instead of talking** in the box under the conversation, e.g. to paste a link.
+- Terminal: `scripts/text_chat.py` has `/add <file>` and `/notes`.
+
 ## Adding course materials
 
 Drop `.md`, `.txt` or `.pdf` files into `./materials/`. They are chunked, embedded and stored in a local
@@ -229,6 +263,9 @@ tutor/
   prompts.py            system prompt per mode, emotion rules and hidden app messages
   session.py            the session from the welcome form (mode, name, subject)
   emotions.py           emotion tags: the list, and the streaming parser that strips them
+  notes.py              your uploaded notes: reading, sections, links, search, and the AI's tools
+  web.py                safe web page reader for links (public sites only; GitHub via its API)
+  perf.py               CPU thread limits
   speech_text.py        sentence chunking and LaTeX-to-speech
   hotkeys.py            global hotkeys (physical key matching, works with Option)
   state.py              state shared between the loops
@@ -246,6 +283,7 @@ scripts/
   hotkey_check.py       verifies global hotkeys from the current terminal
   *.command             Terminal.app launchers for the scripts above
 materials/              your course notes
+notes/                  notes uploaded in the page (created on first upload, not in git)
 logs/                   run logs and check reports
 ```
 

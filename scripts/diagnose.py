@@ -297,7 +297,7 @@ def summary() -> None:
         hints.append("The laptop is on battery / battery saver: plug it in and use the Best performance power mode.")
     if facts.get("groq_voice_terms"):
         hints.append("Groq's voice needs a one-time terms acceptance: https://console.groq.com/playground?model="
-                     "canopylabs%2Forpheus-arabic-saudi (until then the slower local voice is used).")
+                     "canopylabs%2Forpheus-v1-english (until then the slower local voice is used).")
     if config.TTS_ENGINE == "local" and facts.get("tts_first_ms", 0) > 700:
         hints.append(f"The local voice is slow on this CPU (first sentence {facts['tts_first_ms']:.0f}ms): "
                      "set TTS_ENGINE = \"groq\" in config.py.")

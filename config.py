@@ -138,11 +138,10 @@ STT_OFFLINE_RETRY_S = 30       # after a Groq STT failure, stay local-only this 
 
 # Text-to-speech. "groq": Groq's Orpheus voice (fast on any laptop; reply text is sent to Groq to be spoken), with
 # Kokoro on this computer as the backup. "local": Kokoro only (fully offline; needs a fast CPU).
-# The Groq voice needs a one-time terms acceptance: https://console.groq.com/playground?model=canopylabs%2Forpheus-arabic-saudi
+# The Groq voice needs a one-time terms acceptance: https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english
 TTS_ENGINE = "groq"
-TTS_GROQ_MODEL = "canopylabs/orpheus-arabic-saudi"
-TTS_GROQ_VOICE = "noura"       # Arabic (Saudi) voices: noura, lulwa, aisha, fahad, sultan, abdullah
-                               # (orpheus-v1-english voices: autumn, diana, hannah, austin, daniel, troy)
+TTS_GROQ_MODEL = "canopylabs/orpheus-v1-english"
+TTS_GROQ_VOICE = "hannah"      # Orpheus voices: autumn, diana, hannah, austin, daniel, troy
 TTS_GROQ_TIMEOUT_S = 6.0
 TTS_GROQ_MAX_CHARS = 200       # longer sentences are split before sending
 TTS_PARALLEL = 3               # sentences requested at once (played in order)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import warnings
 from pathlib import Path
 
@@ -16,12 +17,18 @@ def setup(log_file: str | None = None, level: int = logging.INFO) -> None:
     root = logging.getLogger()
     root.setLevel(level)
     root.handlers.clear()
+    # A Windows console (or output redirected to a file) may use cp1252: print odd characters as "?" instead of failing.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     console = logging.StreamHandler()
     console.setFormatter(fmt)
     root.addHandler(console)
     if log_file:
         LOG_DIR.mkdir(exist_ok=True)
-        fh = logging.FileHandler(LOG_DIR / log_file, mode="w")
+        fh = logging.FileHandler(LOG_DIR / log_file, mode="w", encoding="utf-8")
         fh.setFormatter(fmt)
         root.addHandler(fh)
     for name in _NOISY:

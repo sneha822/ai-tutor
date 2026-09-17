@@ -315,7 +315,7 @@ class NotesLibrary:
 
     def section_text(self, note: Note, index: int) -> str:
         section = note.sections[index]
-        body = (self.dir / note.id / "text.md").read_text()
+        body = (self.dir / note.id / "text.md").read_text(encoding="utf-8", errors="replace")
         return _plain(body[section["start"]:section["end"]])
 
     def search(self, query: str, k: int = 5) -> list[dict]:
@@ -369,7 +369,7 @@ class NotesLibrary:
     def _save(self, note: Note) -> None:
         folder = self.dir / note.id
         if folder.is_dir():
-            (folder / "note.json").write_text(json.dumps(asdict(note), indent=1))
+            (folder / "note.json").write_text(json.dumps(asdict(note), indent=1), encoding="utf-8")
 
     def _update(self, note: Note, **changes) -> None:
         if self.get(note.id) is None:
@@ -382,7 +382,7 @@ class NotesLibrary:
     def _load(self) -> None:
         for path in sorted(self.dir.glob("*/note.json")):
             try:
-                raw = json.loads(path.read_text())
+                raw = json.loads(path.read_text(encoding="utf-8", errors="replace"))
                 note = Note(**raw)
             except Exception:
                 log.exception("skipping unreadable note %s", path.parent.name)
@@ -401,7 +401,7 @@ class NotesLibrary:
             elif note.status == "ready" and self._col is not None:
                 try:
                     if not self._col.get(where={"note_id": note.id}, limit=1)["ids"]:
-                        body = (path.parent / "text.md").read_text()
+                        body = (path.parent / "text.md").read_text(encoding="utf-8", errors="replace")
                         self._index(note, body)   # the search index was cleared
                 except Exception:
                     log.exception("could not re-index note %s", note.id)
@@ -470,7 +470,7 @@ class NotesLibrary:
         if not any(len(t) > 10 and t != "Unreadable page" for t in texts):
             raise NoteError("I couldn't find any readable text in this file.")
         body = "\n\n".join(f"<!-- page {i} -->\n{t}" for i, t in enumerate(texts, 1))
-        (folder / "text.md").write_text(body)
+        (folder / "text.md").write_text(body, encoding="utf-8")
         sections = build_sections(body)
         self._update(note, sections=sections, links=self._find_links(note, texts), progress="Picking out the topics")
         self._index(note, body)
@@ -493,7 +493,7 @@ class NotesLibrary:
             except Exception:
                 log.exception("note %s: could not read PDF links", note.id)
         if texts is None:
-            body = (folder / "text.md").read_text()
+            body = (folder / "text.md").read_text(encoding="utf-8", errors="replace")
             marks = list(_PAGE_MARK.finditer(body))
             texts = [body[m.end():marks[i + 1].start() if i + 1 < len(marks) else len(body)] for i, m in enumerate(marks)]
         for number, text in enumerate(texts, 1):

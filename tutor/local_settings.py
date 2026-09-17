@@ -19,7 +19,7 @@ _lock = threading.Lock()
 
 def load() -> dict:
     try:
-        data = json.loads(PATH.read_text())
+        data = json.loads(PATH.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except FileNotFoundError:
         return {}
@@ -34,6 +34,6 @@ def update(**values) -> None:
         data = load()
         data.update(values)
         try:
-            PATH.write_text(json.dumps(data, indent=2) + "\n")
+            PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         except Exception:
             log.exception("could not save %s (continuing)", PATH.name)

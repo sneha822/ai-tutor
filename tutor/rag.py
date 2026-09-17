@@ -37,7 +37,7 @@ def _load_text(path: Path) -> str:
     if path.suffix.lower() == ".pdf":
         from pypdf import PdfReader
         return "\n\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
-    return path.read_text(errors="ignore")
+    return path.read_text(encoding="utf-8", errors="ignore")
 
 
 def _windows(paragraph: str) -> list[str]:

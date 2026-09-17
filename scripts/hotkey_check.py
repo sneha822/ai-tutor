@@ -25,14 +25,14 @@ LISTEN_S = 20
 
 def out(line: str) -> None:
     print(line, flush=True)
-    with REPORT.open("a") as f:
+    with REPORT.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
     REPORT.parent.mkdir(exist_ok=True)
-    REPORT.write_text(f"hotkey check {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    REPORT.write_text(f"hotkey check {time.strftime('%Y-%m-%d %H:%M:%S')}\n", encoding="utf-8")
     try:
         from ApplicationServices import AXIsProcessTrusted
         out(f"Accessibility trusted (AXIsProcessTrusted): {bool(AXIsProcessTrusted())}")

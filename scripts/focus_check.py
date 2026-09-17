@@ -49,7 +49,7 @@ PHASES = [  # (key, spoken instruction, seconds)
 
 def out(line=""):
     print(line, flush=True)
-    with REPORT.open("a") as f:
+    with REPORT.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 
@@ -156,7 +156,7 @@ def open_camera_with_retry(det):
 def main():
     logging.basicConfig(level=logging.WARNING)
     REPORT.parent.mkdir(exist_ok=True)
-    REPORT.write_text(f"focus check {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    REPORT.write_text(f"focus check {time.strftime('%Y-%m-%d %H:%M:%S')}\n", encoding="utf-8")
     det = FocusDetector()
     fresh = vision.FaceLandmarker.create_from_options(vision.FaceLandmarkerOptions(
         base_options=mp_tasks.BaseOptions(model_asset_path=str(ensure_model())),

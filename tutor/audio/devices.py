@@ -7,15 +7,14 @@ ahead of INPUT_DEVICE / OUTPUT_DEVICE in config.py.
 """
 from __future__ import annotations
 
-import json
 import logging
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import sounddevice as sd
 
 import config
+from tutor import local_settings
 
 if TYPE_CHECKING:
     from tutor.audio.mic import MicListener
@@ -24,7 +23,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("audio")
 
-SETTINGS_PATH = Path(__file__).resolve().parents[2] / config.LOCAL_SETTINGS_FILE
+SETTINGS_PATH = local_settings.PATH
 _CHANNELS = {"input": "max_input_channels", "output": "max_output_channels"}
 
 
@@ -83,14 +82,8 @@ def default_device_name(kind: str) -> str | None:
 def load_saved() -> tuple[str | None, str | None]:
     """(input, output) device names to start with: the page's last choice if there is one, else config.py."""
     names = {"input": config.INPUT_DEVICE, "output": config.OUTPUT_DEVICE}
-    try:
-        saved = json.loads(SETTINGS_PATH.read_text())
-    except FileNotFoundError:
-        saved = {}
-    except Exception as e:
-        log.warning("ignoring unreadable %s (%s)", SETTINGS_PATH.name, e)
-        saved = {}
-    if isinstance(saved, dict):
+    saved = local_settings.load()
+    if saved:
         for kind in names:
             if f"{kind}_device" in saved:
                 names[kind] = saved[f"{kind}_device"] or None
@@ -153,14 +146,4 @@ class AudioDevices:
         self._mic.reopen()
 
     def _save(self) -> None:
-        try:
-            saved = json.loads(SETTINGS_PATH.read_text())
-            if not isinstance(saved, dict):
-                saved = {}
-        except Exception:
-            saved = {}
-        saved.update(input_device=self._mic.device, output_device=self._speaker.device)
-        try:
-            SETTINGS_PATH.write_text(json.dumps(saved, indent=2) + "\n")
-        except Exception:
-            log.exception("could not save the device choice to %s (continuing)", SETTINGS_PATH.name)
+        local_settings.update(input_device=self._mic.device, output_device=self._speaker.device)

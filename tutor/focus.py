@@ -33,6 +33,9 @@ from pathlib import Path
 os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
 # OpenCV prints a warning for every failed frame read; this module reports camera problems once, readably.
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+# Quiet the face tracker's C++ startup chatter (MediaPipe / TensorFlow Lite).
+os.environ.setdefault("GLOG_minloglevel", "2")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 import cv2
 import mediapipe as mp
@@ -41,6 +44,7 @@ from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision
 
 import config
+from tutor import local_settings
 
 log = logging.getLogger("focus")
 
@@ -62,8 +66,9 @@ if sys.platform == "darwin":
     CAMERA_HELP = ("Allow camera access for your terminal app: System Settings > Privacy & Security > Camera, "
                    "then restart.")
 elif sys.platform == "win32":
-    # Media Foundation first: on many webcams it lets Windows share the camera with other apps; DirectShow doesn't.
-    CAMERA_BACKENDS = (cv2.CAP_MSMF, cv2.CAP_DSHOW)
+    # DirectShow first: it opens fastest and sends compressed frames. (The page shows the app's own preview on
+    # Windows, so Media Foundation's camera sharing isn't needed.)
+    CAMERA_BACKENDS = (cv2.CAP_DSHOW, cv2.CAP_MSMF)
     CAMERA_HELP = ("Windows lets one program use the camera: close other tabs showing the tutor page and apps like "
                    "Zoom, Teams or Camera, then restart. Also check Settings > Privacy & security > Camera > 'Let "
                    "desktop apps access your camera'. Laptops with face login may need CAMERA_INDEX = 1 in config.py.")
@@ -190,6 +195,11 @@ class FocusDetector:
         self._infer_ms = 0.0
         self._camera_choice: tuple[int, int, bool] | None = None   # (index, backend, preferred size) that worked
         self._open_failures = 0
+        saved = local_settings.load().get("camera")   # what worked last time on this computer
+        if (isinstance(saved, dict) and saved.get("backend") in CAMERA_BACKENDS
+                and saved.get("index") in (camera_index, camera_index + 1)):
+            self._camera_choice = (saved["index"], saved["backend"], bool(saved.get("sized")))
+            self.camera_index = saved["index"]
 
         options = vision.FaceLandmarkerOptions(
             base_options=mp_tasks.BaseOptions(model_asset_path=str(ensure_model())),
@@ -305,6 +315,8 @@ class FocusDetector:
                 log.warning("Using camera %d: camera %d sent no frames (set CAMERA_INDEX in config.py to skip this)",
                             index, self.camera_index)
                 self.camera_index = index
+            if self._camera_choice != (index, backend, sized):
+                local_settings.update(camera={"index": index, "backend": backend, "sized": sized, "method": name})
             self._camera_choice, self._open_failures = (index, backend, sized), 0
             self._cap = cap
             self._reset_tracking()   # a fresh start: no stale "absent" time carried over from before

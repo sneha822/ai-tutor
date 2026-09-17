@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator
 
 import config
 from tutor import prompts
+from tutor.emotions import strip_tags
 from tutor.llm import LLMClient, LLMError
 from tutor.session import Session
 
@@ -44,12 +45,16 @@ class Tutor:
         # Set when the student cut off the last reply. The model is told in the student's next message rather
         # than by editing the reply, because it imitates any marker it sees in its own past replies.
         self._interrupted = False
+        # What the student said in turns that were cut off before any reply; sent along with their next message.
+        # (Storing a placeholder reply instead made the model start answering with that placeholder.)
+        self._unanswered: list[str] = []
 
     def start_session(self, session: Session) -> None:
         """A fresh conversation for a new session (mode, name or subject)."""
         self.session = session
         self.history = []
         self._interrupted = False
+        self._unanswered = []
         self.current_topic = session.subject or DEFAULT_TOPIC
         if self.notes is not None:
             self.notes.clear()
@@ -116,10 +121,11 @@ class Tutor:
         reply: list[str] = []
         session = self.session or Session()
         camera_on, observation = self._camera()
-        if hidden or not self._interrupted:
-            content = user_text
-        else:
-            content = f"{prompts.INTERRUPTED_NOTE} {user_text}"
+        content = user_text
+        if not hidden and self._unanswered:
+            content = " ".join(self._unanswered + [user_text])
+        if not hidden and self._interrupted:
+            content = f"{prompts.INTERRUPTED_NOTE} {content}"
         if not hidden and camera_on:
             content = prompts.with_camera_note(content, observation)
         think = self._thinker()
@@ -167,13 +173,20 @@ class Tutor:
             yield prompts.LLM_FAILURE_REPLY
             return
 
-        if cancel is not None and cancel.is_set():
-            self._interrupted = True
-        elif not hidden:
-            self._interrupted = False   # the note (if any) was delivered with this message
+        cancelled = cancel is not None and cancel.is_set()
         text = prompts.strip_markers("".join(reply))   # emotion tags stay, so the model keeps using them
-        self.history += [{"role": "user", "content": content},
-                         {"role": "assistant", "content": text or "[neutral] (no reply)"}]
+        if strip_tags(text).strip():
+            self.history += [{"role": "user", "content": content},
+                             {"role": "assistant", "content": text}]
+            if cancelled:
+                self._interrupted = True
+            elif not hidden:
+                self._interrupted = False   # the note (if any) was delivered with this message
+            if not hidden:
+                self._unanswered = []
+        elif not hidden:   # (an unsent interrupted note stays pending too)
+            # Nothing was said: keep the student's words for next time instead of a fake reply.
+            self._unanswered = (self._unanswered + [prompts.strip_markers(user_text)])[-3:]
         log.info("turn done in %.0fms (mode=%s, camera=%s, context chunks=%d, history msgs=%d%s)",
                  (time.perf_counter() - t0) * 1000, session.mode, "on" if camera_on else "off", len(chunks),
                  len(self.history), ", hidden" if hidden else "")

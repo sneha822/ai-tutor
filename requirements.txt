@@ -8,6 +8,7 @@ numpy==2.5.3
 
 # --- LLM + RAG (stage 2) ---
 groq==1.7.0
+openai==3.14.1             # NVIDIA NIM speaks the OpenAI API
 httpx==0.28.1
 python-dotenv==1.2.3
 chromadb==1.5.9

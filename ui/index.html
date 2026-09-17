@@ -167,12 +167,13 @@
       <section class="data-group cloud">
         <h3>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19H7a4.5 4.5 0 1 1 .9-8.9A6 6 0 0 1 19.4 12 3.5 3.5 0 0 1 17.5 19z"/></svg>
-          Sent to the AI service <span>Groq, over the internet</span>
+          Sent to AI services <span>NVIDIA NIM and Groq, over the internet</span>
         </h3>
         <ul>
           <li><strong>Short clips of your voice</strong><span>Only after you finish speaking, to turn them into text (<span data-p="stt_model">Whisper</span>). If the connection drops, transcription happens on this computer instead.</span></li>
           <li><strong>The conversation as text</strong><span>Your transcribed words, the tutor's recent replies (last <span data-p="history_turns">10</span> exchanges) and matching passages from your course notes, so the tutor can answer.</span></li>
           <li><strong>Notes you add</strong><span>Once, when you add them: photos and scanned pages go to an image model (<span data-p="notes_vision">Qwen</span>) to be read, and the text goes to a small model for a title and summary. After that, the AI reads the parts it needs while teaching you.</span></li>
+          <li><strong>The tutor's replies, to be spoken</strong><span>Each sentence the AI says is turned into speech by Groq (<span data-p="tts">Orpheus</span>). If Groq's voice isn't available, the voice is made on this computer instead.</span></li>
           <li><strong>Web pages the AI opens</strong><span>Only links in your notes, links you give it, and links on pages it already opened; public sites only, never your computer or home network. The page text goes to the AI so it can use it.</span></li>
           <li><strong>Your name and what you picked</strong><span>The name you typed and the subject or talk mode from the welcome screen, so the AI can greet you and stay in role.</span></li>
           <li><strong>What the camera notices, as words</strong><span>While your camera is on, a few words like "smiling, looking at you" go along with what you say, so the AI can react to you. Never images or video.</span></li>
@@ -188,7 +189,7 @@
         <ul>
           <li><strong>Your camera video</strong><span>Analyzed in memory for head angle, eyes, expressions and presence, then discarded. Never saved or uploaded. Your self-view stays on this computer too: the browser shows it directly, or on Windows the app sends small preview frames to this page over localhost.</span></li>
           <li><strong>Focus score and face measurements</strong><span>Computed locally. Only the nudge note above ever leaves.</span></li>
-          <li><strong>The tutor's voice</strong><span>Generated on this computer (<span data-p="tts">Kokoro</span>), along with speech detection and the offline transcription fallback.</span></li>
+          <li><strong>Speech detection and backups</strong><span>Detecting when you speak, plus the backup voice (Kokoro) and the offline transcription used when Groq can't be reached.</span></li>
           <li><strong>Your course materials and notes</strong><span>The files in ./materials and ./notes, what was read from them, and their search index. Delete a note anytime from the Notes section.</span></li>
           <li><strong>Session logs</strong><span>Transcripts and focus scores in ./logs, kept on this computer only.</span></li>
         </ul>

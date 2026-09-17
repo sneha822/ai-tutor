@@ -2,11 +2,11 @@
 Your notes: PDFs and photos uploaded in the page, read once, then opened by the AI with tools.
 
 On upload a note is saved under NOTES_DIR/<id>/ and read in the background, one note at a time:
-  * PDF pages with real text are used as they are. Scanned pages and photos go to the Groq image model
-    (NOTES_VISION_MODEL) once and come back as markdown.
+  * PDF pages with real text are used as they are. Scanned pages and photos go to an image model once (NVIDIA NIM's
+    NVIDIA_VISION_MODEL, Groq's NOTES_VISION_MODEL as backup) and come back as markdown.
   * The text is split into numbered sections (headings, else pages) and indexed in the local search store, and a
-    small model (NOTES_SUMMARY_MODEL) writes a title, subject, topics, summary and suggested questions.
-Files and everything read from them stay on this computer; only page images and text go to Groq, at upload.
+    model writes a title, subject, topics, summary and suggested questions.
+Files and everything read from them stay on this computer; only page images and text go to the AI service, at upload.
 
 The AI sees a short "notes shelf" in its prompt and uses NotesTools to open a note, read a section, or search all
 notes. The section being taught stays in its prompt (NotesTools.focus), so follow-ups need no new lookup.
@@ -18,7 +18,6 @@ import io
 import json
 import logging
 import math
-import os
 import queue
 import random
 import re
@@ -31,10 +30,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
-from groq import Groq, RateLimitError
 
 import config
-from tutor import web
+from tutor import providers, web
 from tutor.rag import split
 
 log = logging.getLogger("notes")
@@ -235,7 +233,6 @@ class NotesLibrary:
         self.dir = ROOT / config.NOTES_DIR
         self.dir.mkdir(exist_ok=True)
         self.on_change = on_change
-        self._groq = Groq(api_key=os.getenv("GROQ_API_KEY") or "missing", max_retries=0, timeout=90)
         self._retriever = retriever
         self._col = None
         if retriever is not None:
@@ -519,18 +516,31 @@ class NotesLibrary:
         thumb.thumbnail((THUMB_WIDTH, THUMB_WIDTH * 2))
         thumb.save(path, "JPEG", quality=80)
 
-    def _groq_call(self, note: Note, **request):
-        """One Groq request, waiting out rate limits (a long scanned PDF can hit them)."""
-        for attempt in range(6):
-            try:
-                return self._groq.chat.completions.create(**request)
-            except RateLimitError:
-                if attempt == 5:
-                    raise
-                progress = note.progress
-                self._update(note, progress="Waiting for Groq (rate limit)…")
-                time.sleep(10 * (attempt + 1))
-                self._update(note, progress=progress)
+    def _ai_call(self, note: Note, kind: str, build: Callable[[providers.Route], dict]):
+        """One request on the first provider that works for `kind` (NVIDIA NIM, then Groq). The last provider
+        waits out rate limits, since a long scanned PDF can hit them. Returns (route, response)."""
+        routes = providers.routes(kind)
+        if not routes:
+            raise NoteError("No AI service is set up to read notes (add NVIDIA_API_KEY or GROQ_API_KEY to .env).")
+        for i, route in enumerate(routes):
+            last = i == len(routes) - 1
+            for attempt in range(6 if last else 1):
+                try:
+                    api = route.client.with_options(timeout=90)
+                    return route, api.chat.completions.create(model=route.model, **build(route))
+                except Exception as e:
+                    if last and providers.status(e) == 429 and attempt < 5:
+                        progress = note.progress
+                        self._update(note, progress=f"Waiting for {route.provider.upper()} (rate limit)…")
+                        time.sleep(10 * (attempt + 1))
+                        self._update(note, progress=progress)
+                        continue
+                    if last:
+                        raise
+                    log.warning("note %s: %s failed (%s: %s); trying %s", note.id, route.name,
+                                providers.status(e) or type(e).__name__, str(e)[:120], routes[i + 1].name)
+                    break
+        raise NoteError("No AI service could read this note.")
 
     def _transcribe(self, note: Note, image) -> str:
         img = image.copy()
@@ -539,12 +549,12 @@ class NotesLibrary:
         img.save(buf, "JPEG", quality=85)
         url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
         t0 = time.perf_counter()
-        r = self._groq_call(note, model=config.NOTES_VISION_MODEL, temperature=0, max_tokens=2500, messages=[
+        route, r = self._ai_call(note, "vision", lambda route: {"temperature": 0, "max_tokens": 2500, "messages": [
             {"role": "user", "content": [{"type": "text", "text": VISION_PROMPT},
-                                         {"type": "image_url", "image_url": {"url": url}}]}])
+                                         {"type": "image_url", "image_url": {"url": url}}]}]})
         text = _FENCE.sub("", _THINK.sub("", r.choices[0].message.content or "")).strip()
-        log.info("note %s: page read by %s in %.1fs (%d chars)", note.id, config.NOTES_VISION_MODEL,
-                 time.perf_counter() - t0, len(text))
+        log.info("note %s: page read by %s in %.1fs (%d chars)", note.id, route.name, time.perf_counter() - t0,
+                 len(text))
         return text
 
     def _index(self, note: Note, body: str) -> None:
@@ -571,13 +581,21 @@ class NotesLibrary:
                   '"Biology: Cell Division"), '
                   '"subject" (one to three words), "topics" (3 to 6 short topics), "summary" (two plain sentences), '
                   '"questions" (3 short questions a student might ask about these notes).')
+        def build(route: providers.Route) -> dict:
+            request = {"temperature": 0.2, "max_tokens": 1500, "messages": [
+                {"role": "system", "content": "You organise a student's study notes. Reply with one JSON object only."},
+                {"role": "user", "content": prompt}]}
+            request.update(providers.reasoning_options(route, "low"))
+            if route.provider == "groq":
+                request["response_format"] = {"type": "json_object"}
+            return request
+
         try:
-            r = self._groq_call(note, model=config.NOTES_SUMMARY_MODEL, temperature=0.2, max_tokens=900,
-                                response_format={"type": "json_object"},
-                                extra_body={"reasoning_effort": "low"} if "gpt-oss" in config.NOTES_SUMMARY_MODEL else None,
-                                messages=[{"role": "system", "content": "You organise a student's study notes. Reply with JSON only."},
-                                          {"role": "user", "content": prompt}])
-            data = json.loads(r.choices[0].message.content or "{}")
+            route, r = self._ai_call(note, "summary", build)
+            content = _THINK.sub("", r.choices[0].message.content or "")
+            match = re.search(r"\{.*\}", content, re.S)   # some models wrap the JSON in prose or a code block
+            data = json.loads(match.group(0)) if match else {}
+            log.info("note %s: summary written by %s", note.id, route.name)
         except Exception:
             log.exception("note %s: could not write a summary (using the file name)", note.id)
             data = {}

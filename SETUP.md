@@ -21,6 +21,12 @@ The tutor's "brain" runs on Groq. The API key is like a password that lets the a
 1. Go to <https://console.groq.com> and sign up (Google login works).
 2. Open **API Keys** and click **Create API Key**. Name it anything, like `ai-tutor`.
 3. **Copy the key** (it starts with `gsk_`) and paste it somewhere safe for step 5. Groq shows it only once.
+4. **Optional, for higher limits: an NVIDIA key.** Sign in at <https://build.nvidia.com>, click **Get API Key**
+   and keep the key (starts with `nvapi-`) for step 5. The tutor then uses NVIDIA NIM for its replies and for
+   reading notes, and Groq as the backup. Without it, everything runs on Groq.
+5. **Turn on the tutor's voice:** open
+   <https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english> and accept the terms for the Orpheus
+   voice model (a one-time click). Without this, the tutor falls back to a slower voice that runs on your computer.
 
 Never share this key or post it online.
 
@@ -129,7 +135,8 @@ not: see [Problems and fixes](#problems-and-fixes).
    GROQ_API_KEY=gsk_abc123yourkeyhere
    ```
 
-   No spaces and no quotes.
+   No spaces and no quotes. If you made an NVIDIA key, put it on the `NVIDIA_API_KEY=` line the same way
+   (or delete that line if you didn't).
 4. Save and close. (In `nano`: press `Ctrl+O`, Enter, then `Ctrl+X`.)
 
 The `.env` file stays on your computer. The project is set up so git never uploads it.

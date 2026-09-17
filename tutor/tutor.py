@@ -156,8 +156,11 @@ class Tutor:
             think("end", {"effort": effort})
         except LLMError:
             think("end", {"effort": effort, "failed": True})
-            yield prompts.LLM_FAILURE_REPLY
-            return
+            if not "".join(reply).strip():
+                yield prompts.LLM_FAILURE_REPLY
+                return
+            # The provider broke off mid-reply: keep what was already said rather than apologising over it.
+            log.warning("reply cut short by the AI service; keeping the part already said")
         except Exception:
             log.exception("TURN FAILED (continuing)")
             think("end", {"effort": effort, "failed": True})

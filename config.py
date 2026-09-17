@@ -54,8 +54,20 @@ OTHER_PERSON_MIN_S = 3.0      # ...once it has stayed this long
 # =====================================================================
 # LLM (Groq) — only layer that needs network
 # =====================================================================
-LLM_MODEL = "openai/gpt-oss-120b"   # llama-3.3-70b-versatile was retired from Groq; measured ~0.55s to first sentence
-LLM_FALLBACK_MODEL = "openai/gpt-oss-20b"  # used for a turn when LLM_MODEL is rate limited (free tier: 8k tokens/min per model). "" to disable
+# Where AI text (replies, agent, reading notes) comes from. "nvidia": NVIDIA NIM first (free key from
+# build.nvidia.com as NVIDIA_API_KEY in .env), Groq as the backup when NIM fails or is rate limited. "groq": Groq only.
+# Speech recognition and the voice always use Groq.
+LLM_PROVIDER = "nvidia"
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+# Benchmarked (Sep 2026): lightning-30b first words 0.4-0.6s with occasional multi-second spikes; gpt-oss-20b, kimi-k3,
+# deepseek-v4-flash and llama-3.2-90b-vision timed out; nemotron-3-super-120b was fast but often overloaded.
+NVIDIA_LLM_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"   # replies + agent tools
+NVIDIA_VISION_MODEL = "meta/llama-3.2-11b-vision-instruct"   # reads photos and scanned pages (4.5s, 9/9 key terms)
+NVIDIA_SUMMARY_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"   # note titles, topics and summaries
+NVIDIA_STALL_TIMEOUT_S = 3.0        # NIM silent this long before its first words -> the reply moves to Groq
+
+LLM_MODEL = "openai/gpt-oss-120b"   # Groq backup; llama-3.3-70b-versatile was retired; measured ~0.55s to first sentence
+LLM_FALLBACK_MODEL = "openai/gpt-oss-20b"  # second Groq backup (free tier: 8k tokens/min per model). "" to disable
 LLM_REASONING_EFFORT = "low"        # gpt-oss only; higher = slower first token
 LLM_REASONING_EFFORT_AGENT = "medium"   # used when notes or links are involved, and after the first tool call
 LLM_MAX_TOKENS_AGENT = 1600         # token budget for those deeper-thinking requests (reasoning included)
@@ -63,6 +75,7 @@ LLM_MAX_TOOL_ROUNDS = 6             # tool rounds per reply (open a note, list i
 LLM_TEMPERATURE = 0.6
 LLM_MAX_TOKENS = 600                # includes hidden reasoning tokens
 LLM_TIMEOUT_S = 10.0
+LLM_PROVIDER_RETRY_S = 30           # a provider that just failed is skipped this long
 LLM_KEEPALIVE_S = 300.0             # pooled connection lifetime between turns (measured: no clear latency effect; harmless)
 HISTORY_TURNS = 10                  # most recent user/tutor exchanges sent verbatim (no summarization)
 
@@ -123,8 +136,18 @@ STT_LOCAL_HEDGE_S = 0.6        # start the local backup only if Groq hasn't answ
 STT_LOCAL_MODEL = "base"       # CPU int8; measured ~310ms for a 14s clip
 STT_OFFLINE_RETRY_S = 30       # after a Groq STT failure, stay local-only this long
 
-# Text-to-speech (Kokoro-82M, CPU; measured ~0.1x real time)
-TTS_VOICE = "af_heart"
+# Text-to-speech. "groq": Groq's Orpheus voice (fast on any laptop; reply text is sent to Groq to be spoken), with
+# Kokoro on this computer as the backup. "local": Kokoro only (fully offline; needs a fast CPU).
+# The Groq voice needs a one-time terms acceptance: https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english
+TTS_ENGINE = "groq"
+TTS_GROQ_MODEL = "canopylabs/orpheus-v1-english"
+TTS_GROQ_VOICE = "hannah"      # Orpheus voices: autumn, diana, hannah, austin, daniel, troy
+TTS_GROQ_TIMEOUT_S = 6.0
+TTS_GROQ_MAX_CHARS = 200       # longer sentences are split before sending
+TTS_PARALLEL = 3               # sentences requested at once (played in order)
+TTS_OFFLINE_RETRY_S = 30       # after a Groq voice failure, use the local voice this long
+TTS_LOCAL_PRELOAD = False      # load the Kokoro backup at startup (~1.2 GB RAM); False = only if Groq fails
+TTS_VOICE = "af_heart"         # Kokoro voice (measured ~0.1x real time on Apple Silicon, ~0.7x on a Ryzen 5700U)
 TTS_SPEED = 1.0
 
 # Global hotkeys (pynput syntax). macOS needs Accessibility + Input Monitoring permission for your terminal.

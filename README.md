@@ -6,8 +6,16 @@ animated 3D face, and in tutor mode it watches your webcam for focus: look at yo
 back, a little firmer each time it keeps happening. Video frames are processed in memory and immediately discarded;
 only a few words like "smiling, looking at you" ever reach the AI.
 
-Only the LLM call (Groq) needs the network. Speech-to-text falls back to a local model, and text-to-speech,
-speech detection, retrieval and focus detection all run locally.
+AI text (replies, the agent, reading notes) comes from NVIDIA NIM when `NVIDIA_API_KEY` is set, with Groq as the
+backup; speech recognition and the voice come from Groq, falling back to local models (faster-whisper, Kokoro) when
+Groq can't be reached. Speech detection, retrieval and focus detection always run locally.
+
+**AI providers** (`LLM_PROVIDER` in `config.py`): with `"nvidia"`, each reply goes to `NVIDIA_LLM_MODEL` first. If
+NIM fails to start, or stays silent for `NVIDIA_STALL_TIMEOUT_S` before its first words, the reply moves to Groq and
+NIM is skipped for `LLM_PROVIDER_RETRY_S`. Measured in Sept 2026 on the free endpoints: nemotron-3.5-lightning
+usually starts in 0.4–1.1 s but stalls now and then (Groq then answers, ~3 s later than usual); many other NIM models
+timed out. Note photos are read by `NVIDIA_VISION_MODEL` (llama-3.2-11b-vision, 5–16 s a page; Groq's image model is
+the backup). `"groq"` uses Groq for everything.
 
 **Setting this up for the first time?** Follow **[SETUP.md](SETUP.md)**: step-by-step, plain-language instructions for
 Mac, Windows and Linux.
@@ -243,6 +251,21 @@ Also in `config.py`:
   sends over localhost (`/camera.mjpg`) instead of opening the camera itself. The browser does the same anywhere it
   finds the camera busy.
 - **Groq rate limit (429):** that turn is retried on `LLM_FALLBACK_MODEL` (gpt-oss-20b), which has its own quota.
+- **Groq voice unavailable** (terms not accepted, rate limit, no network): Kokoro loads on this computer in the
+  background and speaks until Groq works again (retried every `TTS_OFFLINE_RETRY_S`). Sentences that arrive while it
+  loads are shown but not spoken.
+
+## The voice
+
+`TTS_ENGINE = "groq"` (default) uses Groq's Orpheus voice (`TTS_GROQ_VOICE`: autumn, diana, hannah, austin, daniel,
+troy). It needs a one-time terms acceptance at
+<https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english>. Sentences are requested
+`TTS_PARALLEL` at a time and played in order; measured ~0.75 s for a short sentence, on any laptop. The Kokoro backup
+is only loaded if Groq fails, which saves ~1.2 GB of RAM.
+
+`"local"` uses Kokoro only: fully offline and faster on Apple Silicon (~0.2 s a sentence), but slow on many Windows
+laptops (~1.7 s measured on a Ryzen 7 5700U on battery). To choose per computer without editing `config.py`, add
+`"tts_engine": "local"` (or `"groq"`) to `local_settings.json`.
 - **LLM unreachable:** the tutor says "Sorry, I lost my connection for a moment" and keeps listening.
 - **Camera missing or blocked:** focus score holds at 100 (no false interventions); the force hotkey still works.
 - Every failure is logged loudly (`ERROR` / uppercase message); none of them crash the app.

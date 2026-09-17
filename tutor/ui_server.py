@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 import config
+from tutor.audio.tts import engine as tts_engine
 from tutor.state import SharedState
 
 log = logging.getLogger("ui")
@@ -296,10 +297,13 @@ class UIServer:
     @staticmethod
     def _privacy() -> dict:
         """Facts for the page's privacy panel, taken from the live configuration."""
-        return {"llm_model": config.LLM_MODEL, "llm_fallback": config.LLM_FALLBACK_MODEL,
+        from tutor import providers
+        return {"llm_model": providers.describe("chat"), "llm_fallback": config.LLM_FALLBACK_MODEL,
                 "stt_model": config.STT_GROQ_MODEL, "stt_local": f"faster-whisper {config.STT_LOCAL_MODEL}",
-                "history_turns": config.HISTORY_TURNS, "tts": f"Kokoro-82M, voice {config.TTS_VOICE}",
-                "notes_vision": config.NOTES_VISION_MODEL}
+                "history_turns": config.HISTORY_TURNS,
+                "tts": (f"Groq {config.TTS_GROQ_MODEL.split('/')[-1]}, voice {config.TTS_GROQ_VOICE}"
+                        if tts_engine() == "groq" else f"Kokoro-82M on this computer, voice {config.TTS_VOICE}"),
+                "notes_vision": providers.describe("vision")}
 
     @staticmethod
     def _event(kind: str, text: str) -> dict | None:

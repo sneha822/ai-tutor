@@ -16,6 +16,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -320,26 +321,55 @@ class VoiceLoop:
             self._emit("tutor_done", strip_tags(prompts.strip_markers(full)))
 
     def _synth_worker(self, chunks: queue.Queue, cancel: threading.Event, marks: dict[str, float]) -> None:
+        """Starts speech for each chunk as soon as it arrives (several at once with a cloud voice) and hands the
+        results to the player in their original order, emotion marks included."""
+        ordered: queue.Queue = queue.Queue()
+        player = threading.Thread(target=self._play_worker, args=(ordered, cancel, marks), name="tts-play", daemon=True)
+        player.start()
+        pool = ThreadPoolExecutor(max_workers=max(1, getattr(self._tts, "parallel", 1)), thread_name_prefix="tts")
+        first = True
+        try:
+            while True:
+                chunk = chunks.get()
+                if chunk is None:
+                    break
+                if cancel.is_set():
+                    continue
+                if isinstance(chunk, EmotionMark):
+                    ordered.put(chunk)
+                    continue
+                spoken = to_speech(chunk)
+                if spoken:
+                    ordered.put(pool.submit(self._synthesize, spoken, marks, first))
+                    first = False
+        finally:
+            ordered.put(None)
+            player.join()
+            pool.shutdown(wait=False, cancel_futures=True)
+
+    def _synthesize(self, spoken: str, marks: dict[str, float], first: bool) -> np.ndarray | None:
+        t0 = time.monotonic()
+        try:
+            audio = self._tts.synthesize(spoken)
+        except Exception:
+            log.exception("TTS FAILED for %r (skipping chunk)", spoken)
+            return None
+        if first:
+            marks["tts_first_ms"] = (time.monotonic() - t0) * 1000
+        return audio
+
+    def _play_worker(self, ordered: queue.Queue, cancel: threading.Event, marks: dict[str, float]) -> None:
         while True:
-            chunk = chunks.get()
-            if chunk is None:
+            item = ordered.get()
+            if item is None:
                 return
             if cancel.is_set():
                 continue
-            if isinstance(chunk, EmotionMark):
-                self._schedule_emotion(chunk.name, cancel)
+            if isinstance(item, EmotionMark):
+                self._schedule_emotion(item.name, cancel)
                 continue
-            spoken = to_speech(chunk)
-            if not spoken:
-                continue
-            t0 = time.monotonic()
-            try:
-                audio = self._tts.synthesize(spoken)
-            except Exception:
-                log.exception("TTS FAILED for %r (skipping chunk)", spoken)
-                continue
-            marks.setdefault("tts_first_ms", (time.monotonic() - t0) * 1000)
-            if self._speaker.enqueue(audio, cancel):
+            audio = item.result()
+            if audio is not None and len(audio) and self._speaker.enqueue(audio, cancel):
                 marks.setdefault("audio_queued", time.monotonic())
                 self._state.tutor_speaking = True
 

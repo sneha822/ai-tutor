@@ -185,10 +185,34 @@ def face() -> None:
         f"that allows about {1000 / avg:.0f} fps")
 
 
+def groq_voice() -> None:
+    import io
+    import soundfile as sf
+    from groq import Groq
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+    client = Groq(api_key=os.getenv("GROQ_API_KEY") or "missing", max_retries=0, timeout=10)
+    for text in ("Sure, let me explain that.",
+                 "The chain rule helps us differentiate a function that sits inside another function."):
+        t0 = time.perf_counter()
+        try:
+            r = client.audio.speech.create(model=config.TTS_GROQ_MODEL, voice=config.TTS_GROQ_VOICE, input=text,
+                                           response_format="wav")
+            audio, rate = sf.read(io.BytesIO(r.read()))
+        except Exception as e:
+            out(f"  Groq voice FAILED: {type(e).__name__}: {str(e)[:200]}")
+            if "terms" in str(e).lower():
+                facts["groq_voice_terms"] = True
+            return
+        out(f"  {len(text):3d} chars -> {len(audio) / rate:.1f}s of speech in {ms(t0):.0f}ms")
+        facts.setdefault("groq_voice_ms", ms(t0))
+
+
 def voice() -> None:
-    from tutor.audio.tts import TTS
+    import tutor.audio.tts as tts_module
+    tts_module.config.TTS_ENGINE = "local"   # time the backup voice on this computer
     t0 = time.perf_counter()
-    tts = TTS()
+    tts = tts_module.TTS()
     out(f"  Voice (Kokoro) loads in {ms(t0):.0f}ms")
     for text in ("Sure, let me explain that.",
                  "The chain rule helps us differentiate a function that sits inside another function.",
@@ -271,8 +295,12 @@ def summary() -> None:
     hints = []
     if facts.get("on_battery") or facts.get("battery_saver"):
         hints.append("The laptop is on battery / battery saver: plug it in and use the Best performance power mode.")
-    if facts.get("tts_first_ms", 0) > 700:
-        hints.append(f"The voice is slow on this CPU (first sentence {facts['tts_first_ms']:.0f}ms): replies will start late.")
+    if facts.get("groq_voice_terms"):
+        hints.append("Groq's voice needs a one-time terms acceptance: https://console.groq.com/playground?model="
+                     "canopylabs%2Forpheus-v1-english (until then the slower local voice is used).")
+    if config.TTS_ENGINE == "local" and facts.get("tts_first_ms", 0) > 700:
+        hints.append(f"The local voice is slow on this CPU (first sentence {facts['tts_first_ms']:.0f}ms): "
+                     "set TTS_ENGINE = \"groq\" in config.py.")
     if facts.get("face_ms", 0) > 40:
         hints.append(f"Face tracking is heavy here ({facts['face_ms']:.0f}ms a frame): lower FOCUS_FPS in config.py.")
     if facts.get("camera_fps", 99) < 10:
@@ -288,7 +316,8 @@ def summary() -> None:
 if __name__ == "__main__":
     out(f"AI Tutor diagnostics, {time.strftime('%Y-%m-%d %H:%M:%S')}")
     out("Close the tutor app before running this (it needs the camera).")
-    for title, fn in (("System", system), ("Camera", camera), ("Face tracking", face), ("Voice", voice),
+    for title, fn in (("System", system), ("Camera", camera), ("Face tracking", face),
+                      ("Groq voice", groq_voice), ("Local backup voice", voice),
                       ("Speech recognition", stt), ("Speech detection", vad), ("Groq replies", groq),
                       ("Audio devices", audio_devices)):
         run(title, fn)

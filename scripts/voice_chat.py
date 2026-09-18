@@ -1,5 +1,5 @@
 """
-Stage 3 check: talk to the tutor. Mic -> VAD -> STT -> tutor -> voice -> output device.
+Stage 3 check: talk to the tutor. Mic -> VAD -> STT -> tutor -> Kokoro -> output device.
 
     .venv/bin/python scripts/voice_chat.py        (or open scripts/run_voice_chat.command)
 

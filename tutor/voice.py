@@ -1,5 +1,5 @@
 """
-Conversation loop: utterance -> STT -> tutor (RAG + streaming LLM) -> sentence chunks -> voice -> speaker.
+Conversation loop: utterance -> STT -> tutor (RAG + streaming LLM) -> sentence chunks -> Kokoro -> speaker.
 
 Interruptible at any point: interrupt() silences playback within one audio block, cancels the LLM stream,
 and drops queued TTS. A new utterance that completes while a turn is still in progress supersedes it, so

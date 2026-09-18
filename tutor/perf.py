@@ -1,5 +1,5 @@
 """
-CPU thread budgets. Embeddings (torch), faster-whisper (CTranslate2), MediaPipe and the browser's 3D page all want the
+CPU thread budgets. Kokoro (torch), faster-whisper (CTranslate2), MediaPipe and the browser's 3D page all want the
 CPU at the same moment, right when a reply is being voiced, and each library defaults to about one thread per core.
 On laptops, Windows ones especially, that oversubscription is what makes the voice start late. Capping each pool
 keeps them from fighting.
@@ -12,7 +12,7 @@ import os
 log = logging.getLogger("perf")
 
 CORES = os.cpu_count() or 4
-TORCH_THREADS = max(2, min(6, CORES // 2))     # embeddings and other torch work
+TORCH_THREADS = max(2, min(6, CORES // 2))     # Kokoro voice
 WHISPER_THREADS = max(2, min(4, CORES // 2))   # offline speech recognition backup
 
 

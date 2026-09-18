@@ -39,10 +39,10 @@ Follow the part for your computer.
 1. Open **Terminal**: press `Cmd + Space`, type `Terminal`, press Enter.
 2. If you don't have Homebrew yet, go to <https://brew.sh>, copy the install command shown on that page, paste it into
    Terminal and press Enter. When it finishes, it shows a few **Next steps** commands: run those too.
-3. Install Python 3.12 and git:
+3. Install Python 3.12, a voice helper (eSpeak NG) and git:
 
    ```bash
-   brew install python@3.12 git
+   brew install python@3.12 espeak-ng git
    ```
 
 ### Windows
@@ -51,12 +51,15 @@ Follow the part for your computer.
    a **3.12** version (3.13 and newer won't work). On the first screen of the installer, **tick "Add python.exe to
    PATH"**, then click Install Now.
 2. **Git:** install from <https://git-scm.com/download/win>. The default options are fine.
-3. Open **PowerShell**: Start menu, type `PowerShell`, press Enter. You'll type the commands below in there.
+3. **eSpeak NG** (helps the tutor pronounce unusual words): open
+   <https://github.com/espeak-ng/espeak-ng/releases>, download the `.msi` file (the `x64` one for most PCs) and
+   install it.
+4. Open **PowerShell**: Start menu, type `PowerShell`, press Enter. You'll type the commands below in there.
 
 ### Linux (Ubuntu or Debian)
 
 ```bash
-sudo apt update && sudo apt install -y python3.12 python3.12-venv libportaudio2 git
+sudo apt update && sudo apt install -y python3.12 python3.12-venv espeak-ng libportaudio2 git
 ```
 
 If `python3.12` can't be found, your system is older than Ubuntu 24.04; install Python 3.12 with

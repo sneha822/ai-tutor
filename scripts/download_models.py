@@ -24,10 +24,19 @@ def embeddings():
     SentenceTransformer(config.EMBED_MODEL, device="cpu")
 
 
-def piper():
-    from tutor.audio.tts import local_voice_path
-    from piper import PiperVoice
-    list(PiperVoice.load(local_voice_path(download=True)).synthesize("Hello."))
+def spacy_model():
+    import spacy
+    try:
+        spacy.load("en_core_web_sm")
+    except OSError:
+        from spacy.cli import download
+        download("en_core_web_sm")
+
+
+def kokoro():
+    from kokoro import KPipeline
+    pipe = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", device="cpu")
+    list(pipe("Hello.", voice=config.TTS_VOICE))
 
 
 def whisper():
@@ -43,7 +52,8 @@ def silero():
 def main():
     results = []
     for name, fn in [("MediaPipe Face Landmarker", face), (f"Embeddings ({config.EMBED_MODEL})", embeddings),
-                     (f"Piper voice {config.TTS_VOICE}", piper),
+                     ("spaCy en_core_web_sm (Kokoro text front end)", spacy_model),
+                     (f"Kokoro-82M + voice {config.TTS_VOICE}", kokoro),
                      (f"faster-whisper {config.STT_LOCAL_MODEL}", whisper), ("Silero VAD", silero)]:
         try:
             fn()

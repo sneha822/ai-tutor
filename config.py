@@ -137,7 +137,7 @@ STT_LOCAL_MODEL = "base"       # CPU int8; measured ~310ms for a 14s clip
 STT_OFFLINE_RETRY_S = 30       # after a Groq STT failure, stay local-only this long
 
 # Text-to-speech. "groq": Groq's Orpheus voice (fast on any laptop; reply text is sent to Groq to be spoken), with
-# Piper on this computer as the backup. "local": Piper only (fully offline, no API key).
+# Kokoro on this computer as the backup. "local": Kokoro only (fully offline; needs a fast CPU).
 # The Groq voice needs a one-time terms acceptance: https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english
 TTS_ENGINE = "groq"
 TTS_GROQ_MODEL = "canopylabs/orpheus-v1-english"
@@ -146,9 +146,8 @@ TTS_GROQ_TIMEOUT_S = 6.0
 TTS_GROQ_MAX_CHARS = 200       # longer sentences are split before sending
 TTS_PARALLEL = 3               # sentences requested at once (played in order)
 TTS_OFFLINE_RETRY_S = 30       # after a Groq voice failure, use the local voice this long
-TTS_LOCAL_PRELOAD = True       # load the Piper backup at startup (~0.4s, ~90 MB RAM) so it's ready instantly
-TTS_VOICE = "en_US-amy-medium"  # Piper voice in models/piper (also: en_US-lessac-medium, en_GB-jenny_dioco-medium)
-                               # measured ~70ms a sentence on a laptop CPU; see piper-voices on Hugging Face
+TTS_LOCAL_PRELOAD = False      # load the Kokoro backup at startup (~1.2 GB RAM); False = only if Groq fails
+TTS_VOICE = "af_heart"         # Kokoro voice (measured ~0.1x real time on Apple Silicon, ~0.7x on a Ryzen 5700U)
 TTS_SPEED = 1.0
 
 # Global hotkeys (pynput syntax). macOS needs Accessibility + Input Monitoring permission for your terminal.

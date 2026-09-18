@@ -21,9 +21,9 @@ from tutor.state import SharedState
 
 log = logging.getLogger("speaker")
 
-RATE = 24000           # the voice's output rate; audio is resampled only for a device that can't open at it
+RATE = 24000           # Kokoro's output rate; audio is resampled only for a device that can't open at it
 BLOCK = 480            # 20 ms
-LEVEL_GAIN = 4.0       # speech RMS ~0.05-0.15 -> level ~0.2-0.6
+LEVEL_GAIN = 4.0       # Kokoro speech RMS ~0.05-0.15 -> level ~0.2-0.6
 LEVEL_RELEASE = 0.6    # per block: rises instantly, falls smoothly over ~60 ms
 
 

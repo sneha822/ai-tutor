@@ -7,7 +7,7 @@ back, a little firmer each time it keeps happening. Video frames are processed i
 only a few words like "smiling, looking at you" ever reach the AI.
 
 AI text (replies, the agent, reading notes) comes from NVIDIA NIM when `NVIDIA_API_KEY` is set, with Groq as the
-backup; speech recognition and the voice come from Groq, falling back to local models (faster-whisper, Piper) when
+backup; speech recognition and the voice come from Groq, falling back to local models (faster-whisper, Kokoro) when
 Groq can't be reached. Speech detection, retrieval and focus detection always run locally.
 
 **AI providers** (`LLM_PROVIDER` in `config.py`): with `"nvidia"`, each reply goes to `NVIDIA_LLM_MODEL` first. If
@@ -23,7 +23,8 @@ Mac, Windows and Linux.
 ## Requirements
 
 - macOS on Apple Silicon (this is what it was built and tested on)
-- **Python 3.12** (mediapipe 1.0.x crashes on macOS, so 0.10.35 is pinned)
+- **Python 3.12** (Kokoro does not support 3.13+; mediapipe 1.0.x crashes on macOS, so 0.10.35 is pinned)
+- Homebrew `espeak-ng` (Kokoro's fallback for words it doesn't know)
 - Webcam, microphone (earphones with a mic recommended), a [Groq](https://console.groq.com) API key
 
 ## Setup
@@ -31,7 +32,7 @@ Mac, Windows and Linux.
 Quick version for macOS. For Windows, Linux or a slower walkthrough, see [SETUP.md](SETUP.md).
 
 ```bash
-brew install python@3.12
+brew install python@3.12 espeak-ng
 ```
 
 ```bash
@@ -45,7 +46,7 @@ cp .env.example .env
 Put your key in `.env` (`GROQ_API_KEY=...`). Never commit `.env`.
 
 Then download every model once, while online (~600 MB: Face Landmarker, MiniLM embeddings, spaCy English,
-Piper voice, faster-whisper base, Silero VAD). After this the app loads models with Hugging Face forced offline,
+Kokoro-82M, faster-whisper base, Silero VAD). After this the app loads models with Hugging Face forced offline,
 so venue wifi can't stall startup.
 
 ```bash
@@ -250,22 +251,20 @@ Also in `config.py`:
   sends over localhost (`/camera.mjpg`) instead of opening the camera itself. The browser does the same anywhere it
   finds the camera busy.
 - **Groq rate limit (429):** that turn is retried on `LLM_FALLBACK_MODEL` (gpt-oss-20b), which has its own quota.
-- **Groq voice unavailable** (terms not accepted, rate limit, no network): Piper speaks on this computer until Groq
-  works again. A rate limit waits exactly as long as Groq asks for; anything else retries after
-  `TTS_OFFLINE_RETRY_S`. Piper is loaded at startup (`TTS_LOCAL_PRELOAD`), so there's no silent gap.
+- **Groq voice unavailable** (terms not accepted, rate limit, no network): Kokoro loads on this computer in the
+  background and speaks until Groq works again (retried every `TTS_OFFLINE_RETRY_S`). Sentences that arrive while it
+  loads are shown but not spoken.
 
 ## The voice
 
 `TTS_ENGINE = "groq"` (default) uses Groq's Orpheus voice (`TTS_GROQ_VOICE`: autumn, diana, hannah, austin, daniel,
 troy). It needs a one-time terms acceptance at
 <https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english>. Sentences are requested
-`TTS_PARALLEL` at a time and played in order; measured ~0.75 s for a short sentence, on any laptop. Groq's free tier
-caps each voice model at ~3600 tokens a day (roughly 40-60 sentences), after which Piper takes over until it resets.
+`TTS_PARALLEL` at a time and played in order; measured ~0.75 s for a short sentence, on any laptop. The Kokoro backup
+is only loaded if Groq fails, which saves ~1.2 GB of RAM.
 
-`"local"` uses Piper only (`TTS_VOICE`, an ONNX voice in `models/piper`): fully offline, no API key, ~70-90 ms a
-sentence on laptop CPU, and it loads in 0.4 s using ~90 MB of RAM. Other voices come from
-[piper-voices](https://huggingface.co/rhasspy/piper-voices); `scripts/download_models.py` fetches the configured one.
-To choose per computer without editing `config.py`, add
+`"local"` uses Kokoro only: fully offline and faster on Apple Silicon (~0.2 s a sentence), but slow on many Windows
+laptops (~1.7 s measured on a Ryzen 7 5700U on battery). To choose per computer without editing `config.py`, add
 `"tts_engine": "local"` (or `"groq"`) to `local_settings.json`.
 - **LLM unreachable:** the tutor says "Sorry, I lost my connection for a moment" and keeps listening.
 - **Camera missing or blocked:** focus score holds at 100 (no false interventions); the force hotkey still works.
@@ -364,5 +363,5 @@ afterwards doesn't remove it from git history.
 
 - End-to-end latency (you stop speaking → tutor starts) measured a median of ~1.5 s on earphones. Most turns
   over target were Groq taking 1–2 s to start its reply.
-- The tutor speaks English only (an English Piper voice); non-Latin text in replies is skipped.
+- The tutor speaks English only (Kokoro's English voice); non-Latin text in replies is skipped.
 - Conversation memory lasts for one session only.
